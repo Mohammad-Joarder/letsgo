@@ -1,0 +1,7 @@
+You are building "Lets Go" — a premium ride-hailing app.
+Always refer to @LetsGo_Master_Prompt.md for tech stack, architecture, and phase details.
+Tech stack: React Native / Expo SDK 54 / Expo Router / Supabase / Stripe / Google Maps / NativeWind.
+Design: Dark mode, #0A0E1A background, #00D4AA accent. Premium feel — Revolut meets Uber.
+Never use Redux. Never use class components. Always use TypeScript.
+Always deliver complete file outputs — never partial diffs unless I ask.
+When in doubt about architecture decisions, follow patterns already established in the codebase.
