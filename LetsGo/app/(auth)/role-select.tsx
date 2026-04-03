@@ -1,164 +1,101 @@
-import React, { useState } from "react";
-import {
-  View, Text, StyleSheet, TouchableOpacity, Alert,
-} from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { COLORS, FONTS, BORDER_RADIUS } from "@/lib/constants";
+import type { Href } from "expo-router";
+import { useRouter } from "expo-router";
+import { useState } from "react";
+import { Pressable, Text, View } from "react-native";
+import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
 import { Button } from "@/components/ui/Button";
-import { updateProfileRole, createRiderRecord, createDriverRecord } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { Card } from "@/components/ui/Card";
+import { useAuth } from "@/hooks/useAuth";
+import { completeRoleSelection } from "@/lib/auth";
+import { isSupabaseConfigured } from "@/lib/supabase";
+import type { UserRole } from "@/lib/types";
 
-type Role = "rider" | "driver";
+type Choice = Exclude<UserRole, "admin">;
 
 export default function RoleSelectScreen() {
-  const { email } = useLocalSearchParams<{ email: string }>();
-  const [selectedRole, setSelectedRole] = useState<Role | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const router = useRouter();
+  const { user, refreshProfile } = useAuth();
+  const [choice, setChoice] = useState<Choice | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const roles = [
-    {
-      id: "rider" as Role,
-      icon: "🧍",
-      title: "I'm a Rider",
-      description: "Book premium rides across Australia instantly",
-      perks: ["Request rides in seconds", "Live driver tracking", "Safe & verified drivers"],
-    },
-    {
-      id: "driver" as Role,
-      icon: "🚗",
-      title: "I'm a Driver",
-      description: "Earn on your schedule with flexible hours",
-      perks: ["Set your own hours", "Weekly payouts", "Earn more with every trip"],
-    },
-  ];
+  const fullName = (user?.user_metadata?.full_name as string | undefined) ?? "";
+  const phone = (user?.user_metadata?.phone as string | undefined) ?? "";
+  const email = user?.email ?? "";
 
-  const handleConfirm = async () => {
-    if (!selectedRole) return;
-    setIsLoading(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Session not found");
-
-      await updateProfileRole(user.id, selectedRole);
-
-      if (selectedRole === "rider") {
-        await createRiderRecord(user.id);
-        router.replace("/(rider)/home");
-      } else {
-        await createDriverRecord(user.id);
-        router.replace("/(auth)/driver-pending");
-      }
-    } catch (error: any) {
-      Alert.alert("Error", error.message || "Could not set your role. Please try again.");
-    } finally {
-      setIsLoading(false);
+  async function onContinue() {
+    setError(null);
+    if (!isSupabaseConfigured) {
+      setError("Supabase is not configured.");
+      return;
     }
-  };
+    if (!user?.id || !choice) {
+      setError("Select how you want to use Lets Go.");
+      return;
+    }
+    if (!fullName.trim() || !email.trim() || !phone.trim()) {
+      setError("Your profile is missing details. Please sign up again with name, email, and phone.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await completeRoleSelection(choice, {
+        userId: user.id,
+        fullName: fullName.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+      });
+      await refreshProfile();
+      if (choice === "driver") {
+        router.replace("/(auth)/driver-review-pending");
+      } else {
+        router.replace("/(rider)/(tabs)/home" as Href);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not complete registration.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
-      <View style={styles.content}>
-        <View style={styles.header}>
-          <Text style={styles.title}>How will you use{"\n"}Let's Go?</Text>
-          <Text style={styles.subtitle}>You can only choose one — choose wisely!</Text>
+    <SafeAreaWrapper edges={["top", "left", "right", "bottom"]}>
+      <View className="flex-1 px-8 pb-10 pt-4">
+        <View className="mb-8">
+          <Text className="font-sora-display text-3xl font-bold text-text">How will you ride?</Text>
+          <Text className="font-inter mt-2 text-base text-textSecondary">
+            Choose rider to book trips, or driver to earn on your schedule.
+          </Text>
         </View>
 
-        <View style={styles.cards}>
-          {roles.map((role) => {
-            const isSelected = selectedRole === role.id;
-            return (
-              <TouchableOpacity
-                key={role.id}
-                onPress={() => setSelectedRole(role.id)}
-                activeOpacity={0.85}
-                style={[styles.card, isSelected && styles.cardSelected]}
-              >
-                {/* Selected indicator */}
-                <View style={[styles.radio, isSelected && styles.radioSelected]}>
-                  {isSelected && <View style={styles.radioDot} />}
-                </View>
+        <Pressable onPress={() => setChoice("rider")}>
+          <Card
+            className={`mb-4 border-2 ${choice === "rider" ? "border-primary" : "border-border"}`}
+          >
+            <Text className="font-sora text-lg font-semibold text-text">Rider</Text>
+            <Text className="font-inter mt-1 text-sm text-textSecondary">
+              Request rides, track drivers live, and pay securely.
+            </Text>
+          </Card>
+        </Pressable>
 
-                <Text style={styles.cardIcon}>{role.icon}</Text>
-                <Text style={[styles.cardTitle, isSelected && styles.cardTitleSelected]}>
-                  {role.title}
-                </Text>
-                <Text style={styles.cardDescription}>{role.description}</Text>
+        <Pressable onPress={() => setChoice("driver")}>
+          <Card
+            className={`mb-6 border-2 ${choice === "driver" ? "border-primary" : "border-border"}`}
+          >
+            <Text className="font-sora text-lg font-semibold text-text">Driver</Text>
+            <Text className="font-inter mt-1 text-sm text-textSecondary">
+              Go online, accept offers, and get paid weekly.
+            </Text>
+          </Card>
+        </Pressable>
 
-                <View style={styles.perksList}>
-                  {role.perks.map((perk) => (
-                    <View key={perk} style={styles.perkRow}>
-                      <Text style={[styles.perkDot, isSelected && styles.perkDotSelected]}>✓</Text>
-                      <Text style={styles.perkText}>{perk}</Text>
-                    </View>
-                  ))}
-                </View>
-              </TouchableOpacity>
-            );
-          })}
+        {error ? <Text className="font-inter mb-4 text-sm text-error">{error}</Text> : null}
+
+        <View className="mt-auto">
+          <Button title="Continue" loading={loading} disabled={!choice} onPress={onContinue} />
         </View>
-
-        <Button
-          label={selectedRole === "driver" ? "Apply as Driver" : "Get Started"}
-          onPress={handleConfirm}
-          isLoading={isLoading}
-          disabled={!selectedRole}
-          size="lg"
-          style={styles.cta}
-        />
-
-        <Text style={styles.noteText}>
-          {selectedRole === "driver"
-            ? "Your account will be reviewed before you can go online."
-            : "You can start booking immediately after signing up."}
-        </Text>
       </View>
-    </SafeAreaView>
+    </SafeAreaWrapper>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
-  content: { flex: 1, paddingHorizontal: 24, paddingTop: 40 },
-  header: { marginBottom: 28 },
-  title: {
-    fontFamily: FONTS.soraBold, fontSize: 30, color: COLORS.text,
-    letterSpacing: -0.5, lineHeight: 38, marginBottom: 10,
-  },
-  subtitle: { fontFamily: FONTS.interRegular, fontSize: 14, color: COLORS.textSecondary },
-  cards: { gap: 14, marginBottom: 28 },
-  card: {
-    backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.xl,
-    padding: 20, borderWidth: 1.5, borderColor: COLORS.border,
-  },
-  cardSelected: {
-    borderColor: COLORS.primary,
-    backgroundColor: "rgba(0, 212, 170, 0.05)",
-  },
-  radio: {
-    position: "absolute", top: 16, right: 16,
-    width: 22, height: 22, borderRadius: 11,
-    borderWidth: 2, borderColor: COLORS.border,
-    alignItems: "center", justifyContent: "center",
-  },
-  radioSelected: { borderColor: COLORS.primary },
-  radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.primary },
-  cardIcon: { fontSize: 32, marginBottom: 10 },
-  cardTitle: {
-    fontFamily: FONTS.soraSemiBold, fontSize: 18, color: COLORS.text, marginBottom: 6,
-  },
-  cardTitleSelected: { color: COLORS.primary },
-  cardDescription: {
-    fontFamily: FONTS.interRegular, fontSize: 13, color: COLORS.textSecondary, marginBottom: 14,
-  },
-  perksList: { gap: 6 },
-  perkRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  perkDot: { fontFamily: FONTS.interBold, fontSize: 12, color: COLORS.textMuted },
-  perkDotSelected: { color: COLORS.primary },
-  perkText: { fontFamily: FONTS.interRegular, fontSize: 13, color: COLORS.textSecondary },
-  cta: { marginBottom: 14 },
-  noteText: {
-    textAlign: "center", fontFamily: FONTS.interRegular,
-    fontSize: 12, color: COLORS.textMuted, lineHeight: 18,
-  },
-});

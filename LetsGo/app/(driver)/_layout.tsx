@@ -1,44 +1,91 @@
-import React from "react";
-import { Tabs } from "expo-router";
-import { View, Text, StyleSheet } from "react-native";
-import { COLORS, FONTS } from "@/lib/constants";
-
-function TabIcon({ focused, icon, label }: { focused: boolean; icon: string; label: string }) {
-  return (
-    <View style={styles.tabItem}>
-      <Text style={[styles.tabIcon, focused && styles.tabIconActive]}>{icon}</Text>
-      <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>{label}</Text>
-    </View>
-  );
-}
+import { Ionicons } from "@expo/vector-icons";
+import { Tabs, useRouter, useSegments } from "expo-router";
+import { useEffect } from "react";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function DriverLayout() {
+  const router = useRouter();
+  const segments = useSegments();
+  const { initialized, session, profile, profileLoading, driverApproval, configError } = useAuth();
+
+  useEffect(() => {
+    if (!initialized || configError || profileLoading) return;
+
+    if (!session) {
+      if (segments[0] !== "(driver)") return;
+      router.replace("/(auth)");
+      return;
+    }
+
+    if (profile?.role !== "driver" || driverApproval !== "approved") {
+      const group = segments[0] as string | undefined;
+      const leaf = segments[1] as string | undefined;
+      if (group === "(auth)" && leaf === "driver-review-pending") return;
+      if (group !== "(driver)") return;
+      router.replace("/(auth)/driver-review-pending");
+    }
+  }, [
+    initialized,
+    configError,
+    profileLoading,
+    session,
+    profile?.role,
+    driverApproval,
+    segments,
+    router,
+  ]);
+
+  if (configError || !initialized || profileLoading) {
+    return null;
+  }
+
+  if (!session || profile?.role !== "driver" || driverApproval !== "approved") {
+    return null;
+  }
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: COLORS.surface,
-          borderTopColor: COLORS.border,
-          borderTopWidth: 1,
-          height: 80,
-          paddingBottom: 16,
+          backgroundColor: "#131929",
+          borderTopColor: "#1E2D45",
+          height: 60,
+          paddingBottom: 8,
           paddingTop: 8,
         },
-        tabBarShowLabel: false,
+        tabBarActiveTintColor: "#00D4AA",
+        tabBarInactiveTintColor: "#8A94A6",
+        tabBarLabelStyle: { fontFamily: "Inter_500Medium", fontSize: 11 },
       }}
     >
-      <Tabs.Screen name="home" options={{ tabBarIcon: ({ focused }) => <TabIcon focused={focused} icon="🚗" label="Drive" /> }} />
-      <Tabs.Screen name="earnings" options={{ tabBarIcon: ({ focused }) => <TabIcon focused={focused} icon="💰" label="Earnings" /> }} />
-      <Tabs.Screen name="account" options={{ tabBarIcon: ({ focused }) => <TabIcon focused={focused} icon="👤" label="Account" /> }} />
+      <Tabs.Screen
+        name="home"
+        options={{
+          title: "Home",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="speedometer-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="earnings"
+        options={{
+          title: "Earnings",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="wallet-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="account"
+        options={{
+          title: "Account",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="person-outline" size={size} color={color} />
+          ),
+        }}
+      />
     </Tabs>
   );
 }
-
-const styles = StyleSheet.create({
-  tabItem: { alignItems: "center", gap: 3 },
-  tabIcon: { fontSize: 22, opacity: 0.45 },
-  tabIconActive: { opacity: 1 },
-  tabLabel: { fontFamily: FONTS.interMedium, fontSize: 10, color: COLORS.textMuted },
-  tabLabelActive: { color: COLORS.primary },
-});

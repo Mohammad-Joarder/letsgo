@@ -1,22 +1,24 @@
-import { supabase, UserRole } from "./supabase";
+import type { UserRole } from "./types";
+import { supabase } from "./supabase";
 
-// ─── Sign Up ──────────────────────────────────────────────────
+export async function signInWithEmail(email: string, password: string) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data;
+}
 
-export async function signUp(
+export async function signUpWithEmail(
   email: string,
   password: string,
-  fullName: string,
-  phone: string,
-  role: UserRole
+  metadata: { full_name: string; phone: string }
 ) {
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: {
       data: {
-        full_name: fullName,
-        phone,
-        role,
+        full_name: metadata.full_name,
+        phone: metadata.phone,
       },
     },
   });
@@ -24,98 +26,97 @@ export async function signUp(
   return data;
 }
 
-// ─── Sign In ──────────────────────────────────────────────────
-
-export async function signIn(email: string, password: string) {
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  });
-  if (error) throw error;
-  return data;
+export async function verifyEmailOtp(email: string, token: string) {
+  const trimmed = token.replace(/\s/g, "");
+  const tryTypes = ["signup", "email"] as const;
+  let lastError: Error | null = null;
+  for (const type of tryTypes) {
+    const { data, error } = await supabase.auth.verifyOtp({
+      email,
+      token: trimmed,
+      type,
+    });
+    if (!error) return data;
+    lastError = error;
+  }
+  if (lastError) throw lastError;
+  return null;
 }
 
-// ─── Sign Out ─────────────────────────────────────────────────
-
-export async function signOut() {
-  const { error } = await supabase.auth.signOut();
-  if (error) throw error;
-}
-
-// ─── Get current session ──────────────────────────────────────
-
-export async function getSession() {
-  const { data, error } = await supabase.auth.getSession();
-  if (error) throw error;
-  return data.session;
-}
-
-// ─── Get profile ──────────────────────────────────────────────
-
-export async function getProfile(userId: string) {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", userId)
-    .single();
-  if (error) throw error;
-  return data;
-}
-
-// ─── Create rider record ──────────────────────────────────────
-
-export async function createRiderRecord(userId: string) {
-  const { error } = await supabase.from("riders").insert({ id: userId });
-  if (error) throw error;
-}
-
-// ─── Create driver record ─────────────────────────────────────
-
-export async function createDriverRecord(userId: string) {
-  const { error } = await supabase.from("drivers").insert({
-    id: userId,
-    approval_status: "pending",
-  });
-  if (error) throw error;
-}
-
-// ─── Update profile role ──────────────────────────────────────
-
-export async function updateProfileRole(userId: string, role: UserRole) {
-  const { error } = await supabase
-    .from("profiles")
-    .update({ role })
-    .eq("id", userId);
-  if (error) throw error;
-}
-
-// ─── Reset password ───────────────────────────────────────────
-
-export async function resetPassword(email: string) {
+export async function requestPasswordReset(email: string) {
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: "letsgo://reset-password",
   });
   if (error) throw error;
 }
 
-// ─── Verify OTP ───────────────────────────────────────────────
-
-export async function verifyOtp(email: string, token: string) {
-  const { data, error } = await supabase.auth.verifyOtp({
-    email,
-    token,
-    type: "signup",
-  });
+export async function signOut() {
+  const { error } = await supabase.auth.signOut();
   if (error) throw error;
-  return data;
 }
 
-// ─── Update push token ────────────────────────────────────────
+export async function createRiderProfile(params: {
+  userId: string;
+  fullName: string;
+  email: string;
+  phone: string;
+}) {
+  const { error: profileError } = await supabase.from("profiles").insert({
+    id: params.userId,
+    role: "rider",
+    full_name: params.fullName,
+    email: params.email,
+    phone: params.phone,
+  });
+  if (profileError) throw profileError;
 
-export async function updatePushToken(userId: string, token: string) {
-  const { error } = await supabase
-    .from("profiles")
-    .update({ expo_push_token: token })
-    .eq("id", userId);
-  if (error) throw error;
+  const { error: riderError } = await supabase.from("riders").insert({
+    id: params.userId,
+  });
+  if (riderError) throw riderError;
+}
+
+export async function createDriverProfile(params: {
+  userId: string;
+  fullName: string;
+  email: string;
+  phone: string;
+}) {
+  const { error: profileError } = await supabase.from("profiles").insert({
+    id: params.userId,
+    role: "driver",
+    full_name: params.fullName,
+    email: params.email,
+    phone: params.phone,
+  });
+  if (profileError) throw profileError;
+
+  const { error: driverError } = await supabase.from("drivers").insert({
+    id: params.userId,
+    approval_status: "pending",
+    current_status: "offline",
+    is_online: false,
+  });
+  if (driverError) throw driverError;
+}
+
+export async function completeRoleSelection(
+  role: Exclude<UserRole, "admin">,
+  meta: { userId: string; fullName: string; email: string; phone: string }
+) {
+  if (role === "rider") {
+    await createRiderProfile({
+      userId: meta.userId,
+      fullName: meta.fullName,
+      email: meta.email,
+      phone: meta.phone,
+    });
+    return;
+  }
+  await createDriverProfile({
+    userId: meta.userId,
+    fullName: meta.fullName,
+    email: meta.email,
+    phone: meta.phone,
+  });
 }

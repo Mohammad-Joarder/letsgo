@@ -1,154 +1,55 @@
-import React from "react";
-import {
-  TouchableOpacity,
-  Text,
-  ActivityIndicator,
-  ViewStyle,
-  TextStyle,
-  StyleSheet,
-  View,
-} from "react-native";
-import { COLORS, FONTS, BORDER_RADIUS } from "@/lib/constants";
+import { ActivityIndicator, Pressable, Text, type PressableProps } from "react-native";
 
-type Variant = "primary" | "secondary" | "ghost" | "danger" | "outline";
-type Size = "sm" | "md" | "lg";
+type Variant = "primary" | "secondary" | "ghost";
 
-interface ButtonProps {
-  label: string;
-  onPress: () => void;
+export type ButtonProps = PressableProps & {
+  title: string;
   variant?: Variant;
-  size?: Size;
-  isLoading?: boolean;
-  disabled?: boolean;
-  icon?: React.ReactNode;
-  iconPosition?: "left" | "right";
-  fullWidth?: boolean;
-  style?: ViewStyle;
-  labelStyle?: TextStyle;
-}
-
-const sizeStyles: Record<Size, { container: ViewStyle; label: TextStyle }> = {
-  sm: {
-    container: { paddingVertical: 8, paddingHorizontal: 16, borderRadius: BORDER_RADIUS.sm },
-    label: { fontSize: 13, fontFamily: FONTS.interSemiBold },
-  },
-  md: {
-    container: { paddingVertical: 14, paddingHorizontal: 24, borderRadius: BORDER_RADIUS.md },
-    label: { fontSize: 15, fontFamily: FONTS.interSemiBold },
-  },
-  lg: {
-    container: { paddingVertical: 18, paddingHorizontal: 32, borderRadius: BORDER_RADIUS.lg },
-    label: { fontSize: 17, fontFamily: FONTS.soraSemiBold },
-  },
+  loading?: boolean;
+  textClassName?: string;
+  className?: string;
 };
 
-const variantStyles: Record<
-  Variant,
-  { container: ViewStyle; label: TextStyle }
-> = {
+const base =
+  "min-h-[52px] items-center justify-center rounded-2xl px-6 active:opacity-90 disabled:opacity-40";
+
+const variants: Record<Variant, { wrap: string; text: string }> = {
   primary: {
-    container: { backgroundColor: COLORS.primary },
-    label: { color: "#0A0E1A" },
+    wrap: "bg-primary",
+    text: "font-inter text-base font-semibold text-background",
   },
   secondary: {
-    container: { backgroundColor: COLORS.surface2 },
-    label: { color: COLORS.text },
+    wrap: "border border-border bg-surface2",
+    text: "font-inter text-base font-semibold text-text",
   },
   ghost: {
-    container: { backgroundColor: "transparent" },
-    label: { color: COLORS.primary },
-  },
-  danger: {
-    container: { backgroundColor: COLORS.error },
-    label: { color: COLORS.text },
-  },
-  outline: {
-    container: {
-      backgroundColor: "transparent",
-      borderWidth: 1.5,
-      borderColor: COLORS.primary,
-    },
-    label: { color: COLORS.primary },
+    wrap: "bg-transparent",
+    text: "font-inter text-base font-semibold text-primary",
   },
 };
 
 export function Button({
-  label,
-  onPress,
+  title,
   variant = "primary",
-  size = "md",
-  isLoading = false,
-  disabled = false,
-  icon,
-  iconPosition = "left",
-  fullWidth = true,
-  style,
-  labelStyle,
+  loading,
+  disabled,
+  className = "",
+  textClassName = "",
+  ...rest
 }: ButtonProps) {
-  const isDisabled = disabled || isLoading;
-
+  const v = variants[variant];
   return (
-    <TouchableOpacity
-      onPress={onPress}
-      disabled={isDisabled}
-      activeOpacity={0.8}
-      style={[
-        styles.base,
-        sizeStyles[size].container,
-        variantStyles[variant].container,
-        fullWidth && styles.fullWidth,
-        isDisabled && styles.disabled,
-        style,
-      ]}
+    <Pressable
+      accessibilityRole="button"
+      className={`${base} ${v.wrap} ${className}`}
+      disabled={disabled || loading}
+      {...rest}
     >
-      {isLoading ? (
-        <ActivityIndicator
-          size="small"
-          color={variant === "primary" ? "#0A0E1A" : COLORS.primary}
-        />
+      {loading ? (
+        <ActivityIndicator color={variant === "primary" ? "#0A0E1A" : "#00D4AA"} />
       ) : (
-        <View style={styles.content}>
-          {icon && iconPosition === "left" && (
-            <View style={styles.iconLeft}>{icon}</View>
-          )}
-          <Text
-            style={[
-              sizeStyles[size].label,
-              variantStyles[variant].label,
-              labelStyle,
-            ]}
-          >
-            {label}
-          </Text>
-          {icon && iconPosition === "right" && (
-            <View style={styles.iconRight}>{icon}</View>
-          )}
-        </View>
+        <Text className={`${v.text} ${textClassName}`}>{title}</Text>
       )}
-    </TouchableOpacity>
+    </Pressable>
   );
 }
-
-const styles = StyleSheet.create({
-  base: {
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-  },
-  fullWidth: {
-    width: "100%",
-  },
-  disabled: {
-    opacity: 0.45,
-  },
-  content: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  iconLeft: {
-    marginRight: 8,
-  },
-  iconRight: {
-    marginLeft: 8,
-  },
-});

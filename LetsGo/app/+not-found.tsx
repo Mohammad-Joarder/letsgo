@@ -1,25 +1,22 @@
-import { View, Text, StyleSheet } from "react-native";
-import { Link } from "expo-router";
-import { COLORS, FONTS } from "@/lib/constants";
+import { useRouter } from "expo-router";
+import { Text, View } from "react-native";
+import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
+import { Button } from "@/components/ui/Button";
 
 export default function NotFoundScreen() {
+  const router = useRouter();
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.emoji}>🚗</Text>
-      <Text style={styles.title}>Lost your way?</Text>
-      <Text style={styles.subtitle}>This screen doesn't exist.</Text>
-      <Link href="/(auth)" style={styles.link}>
-        <Text style={styles.linkText}>Go back home</Text>
-      </Link>
-    </View>
+    <SafeAreaWrapper edges={["top", "left", "right", "bottom"]}>
+      <View className="flex-1 items-center justify-center px-8">
+        <Text className="font-sora-display text-3xl font-bold text-text">Lost?</Text>
+        <Text className="font-inter mt-3 text-center text-textSecondary">
+          This screen does not exist in Lets Go yet.
+        </Text>
+        <View className="mt-10 w-full">
+          <Button title="Back to start" variant="primary" onPress={() => router.replace("/(auth)")} />
+        </View>
+      </View>
+    </SafeAreaWrapper>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background, alignItems: "center", justifyContent: "center", gap: 12 },
-  emoji: { fontSize: 60 },
-  title: { fontFamily: FONTS.soraBold, fontSize: 24, color: COLORS.text },
-  subtitle: { fontFamily: FONTS.interRegular, fontSize: 15, color: COLORS.textSecondary },
-  link: { marginTop: 8 },
-  linkText: { fontFamily: FONTS.interSemiBold, fontSize: 15, color: COLORS.primary },
-});

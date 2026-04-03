@@ -1,92 +1,79 @@
-import React, { useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
-import { router } from "expo-router";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { COLORS, FONTS, BORDER_RADIUS } from "@/lib/constants";
+import { Link, useRouter } from "expo-router";
+import { useState } from "react";
+import { Pressable, Text, View } from "react-native";
+import { KeyboardAwareView } from "@/components/shared/KeyboardAwareView";
+import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { resetPassword } from "@/lib/auth";
+import { requestPasswordReset } from "@/lib/auth";
+import { isSupabaseConfigured } from "@/lib/supabase";
 
 export default function ForgotPasswordScreen() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleReset = async () => {
-    if (!email.trim()) { setError("Email is required"); return; }
-    if (!/\S+@\S+\.\S+/.test(email)) { setError("Enter a valid email"); return; }
-    setError("");
-    setIsLoading(true);
-    try {
-      await resetPassword(email.trim().toLowerCase());
-      setSent(true);
-    } catch (e: any) {
-      Alert.alert("Error", e.message || "Could not send reset email.");
-    } finally {
-      setIsLoading(false);
+  async function onSubmit() {
+    setError(null);
+    if (!isSupabaseConfigured) {
+      setError("Supabase is not configured. Check your .env file.");
+      return;
     }
-  };
-
-  if (sent) {
-    return (
-      <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
-        <View style={styles.content}>
-          <View style={styles.successIcon}>
-            <Text style={{ fontSize: 40 }}>📬</Text>
-          </View>
-          <Text style={styles.title}>Check your inbox</Text>
-          <Text style={styles.subtitle}>
-            We sent a password reset link to{"\n"}
-            <Text style={styles.emailText}>{email}</Text>
-          </Text>
-          <Button label="Back to Sign In" onPress={() => router.replace("/(auth)/sign-in")} size="lg" />
-        </View>
-      </SafeAreaView>
-    );
+    if (!email.trim()) {
+      setError("Enter the email for your account.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await requestPasswordReset(email.trim());
+      setDone(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not send reset email.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
-      <TouchableOpacity onPress={() => router.back()} style={styles.back}>
-        <Text style={styles.backText}>← Back</Text>
-      </TouchableOpacity>
-      <View style={styles.content}>
-        <Text style={styles.title}>Reset password</Text>
-        <Text style={styles.subtitle}>
-          Enter your email and we'll send you a reset link.
-        </Text>
-        <Input
-          label="Email address"
-          placeholder="you@example.com"
-          value={email}
-          onChangeText={setEmail}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          error={error}
-        />
-        <Button label="Send Reset Link" onPress={handleReset} isLoading={isLoading} size="lg" />
-      </View>
-    </SafeAreaView>
+    <SafeAreaWrapper edges={["top", "left", "right", "bottom"]}>
+      <KeyboardAwareView contentContainerClassName="px-8 pb-8 pt-4">
+        <View className="mb-8">
+          <Text className="font-sora-display text-3xl font-bold text-text">Reset password</Text>
+          <Text className="font-inter mt-2 text-base text-textSecondary">
+            We will email you a link to choose a new password (check spam).
+          </Text>
+        </View>
+
+        {done ? (
+          <View className="gap-6">
+            <Text className="font-inter text-base leading-6 text-text">
+              If an account exists for {email.trim()}, you will receive reset instructions shortly.
+            </Text>
+            <Button title="Back to sign in" variant="secondary" onPress={() => router.replace("/(auth)/sign-in")} />
+          </View>
+        ) : (
+          <>
+            <Input
+              label="Email"
+              autoCapitalize="none"
+              autoComplete="email"
+              keyboardType="email-address"
+              value={email}
+              onChangeText={setEmail}
+            />
+            {error ? <Text className="font-inter mb-4 text-sm text-error">{error}</Text> : null}
+            <Button title="Send reset email" loading={loading} onPress={onSubmit} />
+          </>
+        )}
+
+        <Link href="/(auth)/sign-in" asChild>
+          <Pressable className="mt-8 self-center py-2">
+            <Text className="font-inter text-sm text-primary">Back to sign in</Text>
+          </Pressable>
+        </Link>
+      </KeyboardAwareView>
+    </SafeAreaWrapper>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
-  back: { marginTop: 12, marginLeft: 28 },
-  backText: { fontFamily: FONTS.interMedium, fontSize: 15, color: COLORS.textSecondary },
-  content: { flex: 1, paddingHorizontal: 28, paddingTop: 40 },
-  successIcon: {
-    width: 80, height: 80, borderRadius: 24, backgroundColor: COLORS.surface2,
-    alignItems: "center", justifyContent: "center", marginBottom: 24,
-  },
-  title: {
-    fontFamily: FONTS.soraBold, fontSize: 28, color: COLORS.text,
-    marginBottom: 10, letterSpacing: -0.5,
-  },
-  subtitle: {
-    fontFamily: FONTS.interRegular, fontSize: 15, color: COLORS.textSecondary,
-    lineHeight: 22, marginBottom: 32,
-  },
-  emailText: { fontFamily: FONTS.interSemiBold, color: COLORS.text },
-});

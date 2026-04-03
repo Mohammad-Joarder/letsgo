@@ -1,161 +1,98 @@
-import React, { useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Alert,
-} from "react-native";
-import { router } from "expo-router";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { COLORS, FONTS } from "@/lib/constants";
+import { Link, useRouter } from "expo-router";
+import { useState } from "react";
+import { Pressable, Text, View } from "react-native";
+import { AuthBrandHeader } from "@/components/branding/AuthBrandHeader";
+import { KeyboardAwareView } from "@/components/shared/KeyboardAwareView";
+import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { signUp } from "@/lib/auth";
+import { signUpWithEmail } from "@/lib/auth";
+import { isSupabaseConfigured } from "@/lib/supabase";
 
 export default function SignUpScreen() {
+  const router = useRouter();
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const validate = () => {
-    const e: Record<string, string> = {};
-    if (!fullName.trim()) e.fullName = "Full name is required";
-    if (!email.trim()) e.email = "Email is required";
-    else if (!/\S+@\S+\.\S+/.test(email)) e.email = "Enter a valid email";
-    if (!phone.trim()) e.phone = "Phone number is required";
-    else if (phone.replace(/\D/g, "").length < 9) e.phone = "Enter a valid Australian number";
-    if (!password) e.password = "Password is required";
-    else if (password.length < 8) e.password = "Password must be at least 8 characters";
-    if (password !== confirmPassword) e.confirmPassword = "Passwords do not match";
-    setErrors(e);
-    return Object.keys(e).length === 0;
-  };
-
-  const handleSignUp = async () => {
-    if (!validate()) return;
-    setIsLoading(true);
+  async function onSubmit() {
+    setError(null);
+    if (!isSupabaseConfigured) {
+      setError("Supabase is not configured. Check your .env file.");
+      return;
+    }
+    if (!fullName.trim() || !email.trim() || !phone.trim() || password.length < 8) {
+      setError("Please fill all fields. Password must be at least 8 characters.");
+      return;
+    }
+    setLoading(true);
     try {
-      await signUp(
-        email.trim().toLowerCase(),
-        password,
-        fullName.trim(),
-        phone.trim(),
-        "rider" // temporary — role chosen in next step
-      );
-      // Navigate to OTP verification
+      await signUpWithEmail(email.trim(), password, {
+        full_name: fullName.trim(),
+        phone: phone.trim(),
+      });
       router.push({
         pathname: "/(auth)/verify-otp",
-        params: { email: email.trim().toLowerCase(), fullName: fullName.trim(), phone: phone.trim() },
+        params: { email: email.trim() },
       });
-    } catch (error: any) {
-      Alert.alert(
-        "Sign Up Failed",
-        error.message?.includes("already registered")
-          ? "This email is already registered. Try signing in instead."
-          : error.message || "Something went wrong. Please try again."
-      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create account.");
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
-  };
+  }
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        <TouchableOpacity onPress={() => router.back()} style={styles.back}>
-          <Text style={styles.backText}>← Back</Text>
-        </TouchableOpacity>
-
-        <View style={styles.header}>
-          <Text style={styles.title}>Create account</Text>
-          <Text style={styles.subtitle}>Join Let's Go in under a minute</Text>
+    <SafeAreaWrapper edges={["top", "left", "right", "bottom"]}>
+      <KeyboardAwareView contentContainerClassName="px-8 pb-8 pt-6">
+        <AuthBrandHeader />
+        <View className="mb-8">
+          <Text className="font-sora-display text-3xl font-bold text-text">Create account</Text>
+          <Text className="font-inter mt-2 text-base text-textSecondary">
+            Join Lets Go in under a minute.
+          </Text>
         </View>
 
-        <View style={styles.form}>
-          <Input
-            label="Full name"
-            placeholder="Your full name"
-            value={fullName}
-            onChangeText={setFullName}
-            autoCapitalize="words"
-            autoCorrect={false}
-            error={errors.fullName}
-          />
-          <Input
-            label="Email address"
-            placeholder="you@example.com"
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-            error={errors.email}
-          />
-          <Input
-            label="Phone number"
-            placeholder="04XX XXX XXX"
-            value={phone}
-            onChangeText={setPhone}
-            keyboardType="phone-pad"
-            error={errors.phone}
-            hint="Australian mobile number"
-          />
-          <Input
-            label="Password"
-            placeholder="Min. 8 characters"
-            value={password}
-            onChangeText={setPassword}
-            isPassword
-            error={errors.password}
-          />
-          <Input
-            label="Confirm password"
-            placeholder="Repeat your password"
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            isPassword
-            error={errors.confirmPassword}
-          />
-        </View>
-
-        <Button
-          label="Create Account"
-          onPress={handleSignUp}
-          isLoading={isLoading}
-          size="lg"
+        <Input label="Full name" autoComplete="name" value={fullName} onChangeText={setFullName} />
+        <Input
+          label="Email"
+          autoCapitalize="none"
+          autoComplete="email"
+          keyboardType="email-address"
+          value={email}
+          onChangeText={setEmail}
+        />
+        <Input
+          label="Phone"
+          autoComplete="tel"
+          keyboardType="phone-pad"
+          value={phone}
+          onChangeText={setPhone}
+        />
+        <Input
+          label="Password"
+          secureTextEntry
+          autoComplete="new-password"
+          value={password}
+          onChangeText={setPassword}
         />
 
-        <View style={styles.signInRow}>
-          <Text style={styles.signInText}>Already have an account? </Text>
-          <TouchableOpacity onPress={() => router.push("/(auth)/sign-in")}>
-            <Text style={styles.signInLink}>Sign in</Text>
-          </TouchableOpacity>
+        {error ? <Text className="font-inter mb-4 text-sm text-error">{error}</Text> : null}
+
+        <Button title="Continue" loading={loading} onPress={onSubmit} />
+
+        <View className="mt-10 flex-row flex-wrap items-center justify-center gap-1">
+          <Text className="font-inter text-sm text-textSecondary">Already have an account?</Text>
+          <Link href="/(auth)/sign-in" asChild>
+            <Pressable>
+              <Text className="font-inter text-sm font-semibold text-primary">Sign in</Text>
+            </Pressable>
+          </Link>
         </View>
-      </ScrollView>
-    </SafeAreaView>
+      </KeyboardAwareView>
+    </SafeAreaWrapper>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
-  scroll: { flexGrow: 1, paddingHorizontal: 28, paddingBottom: 40 },
-  back: { marginTop: 12, marginBottom: 32 },
-  backText: { fontFamily: FONTS.interMedium, fontSize: 15, color: COLORS.textSecondary },
-  header: { marginBottom: 32 },
-  title: { fontFamily: FONTS.soraBold, fontSize: 32, color: COLORS.text, marginBottom: 8, letterSpacing: -0.5 },
-  subtitle: { fontFamily: FONTS.interRegular, fontSize: 15, color: COLORS.textSecondary },
-  form: { marginBottom: 8 },
-  signInRow: { flexDirection: "row", justifyContent: "center", alignItems: "center", marginTop: 24 },
-  signInText: { fontFamily: FONTS.interRegular, fontSize: 14, color: COLORS.textSecondary },
-  signInLink: { fontFamily: FONTS.interSemiBold, fontSize: 14, color: COLORS.primary },
-});

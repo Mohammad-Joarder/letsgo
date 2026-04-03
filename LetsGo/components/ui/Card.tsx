@@ -1,42 +1,16 @@
-// components/ui/Card.tsx
-import React from "react";
-import { View, StyleSheet, ViewStyle } from "react-native";
-import { COLORS, BORDER_RADIUS } from "@/lib/constants";
+import { View, type ViewProps } from "react-native";
 
-interface CardProps {
-  children: React.ReactNode;
-  style?: ViewStyle;
-  elevated?: boolean;
-}
+export type CardProps = ViewProps & {
+  className?: string;
+};
 
-export function Card({ children, style, elevated = false }: CardProps) {
+export function Card({ className = "", children, ...rest }: CardProps) {
   return (
     <View
-      style={[
-        styles.card,
-        elevated ? styles.elevated : null,
-        style,
-      ]}
+      className={`rounded-2xl border border-border bg-surface p-4 shadow-sm ${className}`}
+      {...rest}
     >
       {children}
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: COLORS.surface,
-    borderRadius: BORDER_RADIUS.lg,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  elevated: {
-    backgroundColor: COLORS.surface2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-});

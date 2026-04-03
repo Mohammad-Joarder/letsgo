@@ -1,201 +1,81 @@
-import React, { useState, useRef, useEffect } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  Alert,
-  Keyboard,
-} from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { COLORS, FONTS, BORDER_RADIUS } from "@/lib/constants";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useState } from "react";
+import { Text, View } from "react-native";
+import { KeyboardAwareView } from "@/components/shared/KeyboardAwareView";
+import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
 import { Button } from "@/components/ui/Button";
-import { verifyOtp } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
-
-const OTP_LENGTH = 6;
+import { Input } from "@/components/ui/Input";
+import { verifyEmailOtp } from "@/lib/auth";
+import { isSupabaseConfigured } from "@/lib/supabase";
 
 export default function VerifyOtpScreen() {
-  const { email, fullName, phone } = useLocalSearchParams<{
-    email: string;
-    fullName: string;
-    phone: string;
-  }>();
+  const router = useRouter();
+  const { email: emailParam } = useLocalSearchParams<{ email?: string }>();
+  const email = typeof emailParam === "string" ? emailParam : "";
 
-  const [otp, setOtp] = useState<string[]>(Array(OTP_LENGTH).fill(""));
-  const [isLoading, setIsLoading] = useState(false);
-  const [resendCountdown, setResendCountdown] = useState(60);
-  const [canResend, setCanResend] = useState(false);
-  const inputRefs = useRef<(TextInput | null)[]>([]);
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setResendCountdown((prev) => {
-        if (prev <= 1) {
-          setCanResend(true);
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const handleChange = (value: string, index: number) => {
-    const digit = value.replace(/[^0-9]/g, "").slice(-1);
-    const newOtp = [...otp];
-    newOtp[index] = digit;
-    setOtp(newOtp);
-
-    if (digit && index < OTP_LENGTH - 1) {
-      inputRefs.current[index + 1]?.focus();
-    }
-    if (newOtp.every((d) => d !== "") && digit) {
-      Keyboard.dismiss();
-      handleVerify(newOtp.join(""));
-    }
-  };
-
-  const handleKeyPress = (key: string, index: number) => {
-    if (key === "Backspace" && !otp[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-    }
-  };
-
-  const handleVerify = async (code?: string) => {
-    const token = code || otp.join("");
-    if (token.length !== OTP_LENGTH) {
-      Alert.alert("Incomplete", "Please enter the full 6-digit code.");
+  async function onSubmit() {
+    setError(null);
+    if (!isSupabaseConfigured) {
+      setError("Supabase is not configured. Check your .env file.");
       return;
     }
-    setIsLoading(true);
+    if (!email) {
+      setError("Missing email. Go back and sign up again.");
+      return;
+    }
+    if (code.replace(/\s/g, "").length < 6) {
+      setError("Enter the 6-digit code from your email.");
+      return;
+    }
+    setLoading(true);
     try {
-      await verifyOtp(email, token);
-      // Navigate to role selection
-      router.replace({
-        pathname: "/(auth)/role-select",
-        params: { email, fullName, phone },
-      });
-    } catch (error: any) {
-      Alert.alert(
-        "Invalid Code",
-        "The code you entered is incorrect or has expired. Please try again."
+      await verifyEmailOtp(email, code);
+      router.replace("/(auth)/role-select");
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Invalid or expired code. Request a new code from the sign-up screen if needed."
       );
-      setOtp(Array(OTP_LENGTH).fill(""));
-      inputRefs.current[0]?.focus();
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
-  };
-
-  const handleResend = async () => {
-    try {
-      const { error } = await supabase.auth.resend({ type: "signup", email });
-      if (error) throw error;
-      setResendCountdown(60);
-      setCanResend(false);
-      Alert.alert("Code Sent", "A new verification code has been sent to your email.");
-    } catch {
-      Alert.alert("Error", "Could not resend code. Please try again.");
-    }
-  };
+  }
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
-      <TouchableOpacity onPress={() => router.back()} style={styles.back}>
-        <Text style={styles.backText}>← Back</Text>
-      </TouchableOpacity>
-
-      <View style={styles.content}>
-        <View style={styles.iconWrapper}>
-          <Text style={styles.icon}>✉️</Text>
+    <SafeAreaWrapper edges={["top", "left", "right", "bottom"]}>
+      <KeyboardAwareView contentContainerClassName="px-8 pb-8 pt-4">
+        <View className="mb-8">
+          <Text className="font-sora-display text-3xl font-bold text-text">Confirm email</Text>
+          <Text className="font-inter mt-2 text-base text-textSecondary">
+            Enter the verification code we sent to{" "}
+            <Text className="text-text">{email || "your email"}</Text>.
+          </Text>
         </View>
 
-        <Text style={styles.title}>Check your email</Text>
-        <Text style={styles.subtitle}>
-          We sent a 6-digit code to{"\n"}
-          <Text style={styles.emailText}>{email}</Text>
-        </Text>
-
-        {/* OTP Inputs */}
-        <View style={styles.otpRow}>
-          {otp.map((digit, index) => (
-            <TextInput
-              key={index}
-              ref={(ref) => { inputRefs.current[index] = ref; }}
-              style={[styles.otpBox, digit ? styles.otpBoxFilled : null]}
-              value={digit}
-              onChangeText={(v) => handleChange(v, index)}
-              onKeyPress={({ nativeEvent }) => handleKeyPress(nativeEvent.key, index)}
-              keyboardType="number-pad"
-              maxLength={1}
-              textAlign="center"
-              autoFocus={index === 0}
-              selectTextOnFocus
-            />
-          ))}
-        </View>
-
-        <Button
-          label="Verify Email"
-          onPress={() => handleVerify()}
-          isLoading={isLoading}
-          size="lg"
-          style={styles.verifyBtn}
+        <Input
+          label="Verification code"
+          autoCapitalize="characters"
+          keyboardType="number-pad"
+          value={code}
+          onChangeText={setCode}
+          maxLength={8}
         />
 
-        {/* Resend */}
-        <View style={styles.resendRow}>
-          <Text style={styles.resendText}>Didn't receive it? </Text>
-          {canResend ? (
-            <TouchableOpacity onPress={handleResend}>
-              <Text style={styles.resendLink}>Resend code</Text>
-            </TouchableOpacity>
-          ) : (
-            <Text style={styles.resendCountdown}>
-              Resend in {resendCountdown}s
-            </Text>
-          )}
-        </View>
-      </View>
-    </SafeAreaView>
+        {error ? <Text className="font-inter mb-4 text-sm text-error">{error}</Text> : null}
+
+        <Button title="Verify & continue" loading={loading} onPress={onSubmit} />
+
+        <Text className="font-inter mt-6 text-center text-xs leading-5 text-textSecondary">
+          Tip: In Supabase, enable email confirmations and use the OTP template so users receive a
+          6-digit code. If you only use magic links, open the link on this device to complete
+          verification.
+        </Text>
+      </KeyboardAwareView>
+    </SafeAreaWrapper>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
-  back: { marginTop: 12, marginLeft: 28 },
-  backText: { fontFamily: FONTS.interMedium, fontSize: 15, color: COLORS.textSecondary },
-  content: { flex: 1, paddingHorizontal: 28, paddingTop: 48, alignItems: "center" },
-  iconWrapper: {
-    width: 72, height: 72, borderRadius: 20,
-    backgroundColor: COLORS.surface2, alignItems: "center",
-    justifyContent: "center", marginBottom: 24,
-  },
-  icon: { fontSize: 36 },
-  title: {
-    fontFamily: FONTS.soraBold, fontSize: 28, color: COLORS.text,
-    marginBottom: 12, letterSpacing: -0.5,
-  },
-  subtitle: {
-    fontFamily: FONTS.interRegular, fontSize: 15, color: COLORS.textSecondary,
-    textAlign: "center", lineHeight: 22, marginBottom: 40,
-  },
-  emailText: { fontFamily: FONTS.interSemiBold, color: COLORS.text },
-  otpRow: { flexDirection: "row", gap: 10, marginBottom: 36 },
-  otpBox: {
-    width: 48, height: 56, borderRadius: BORDER_RADIUS.md,
-    backgroundColor: COLORS.surface2, borderWidth: 1.5,
-    borderColor: COLORS.border, fontFamily: FONTS.soraBold,
-    fontSize: 22, color: COLORS.text,
-  },
-  otpBoxFilled: { borderColor: COLORS.primary },
-  verifyBtn: { width: "100%", marginBottom: 24 },
-  resendRow: { flexDirection: "row", alignItems: "center" },
-  resendText: { fontFamily: FONTS.interRegular, fontSize: 14, color: COLORS.textSecondary },
-  resendLink: { fontFamily: FONTS.interSemiBold, fontSize: 14, color: COLORS.primary },
-  resendCountdown: { fontFamily: FONTS.interMedium, fontSize: 14, color: COLORS.textMuted },
-});

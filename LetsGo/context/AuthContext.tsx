@@ -1,144 +1,160 @@
+import type { Session, User } from "@supabase/supabase-js";
 import React, {
   createContext,
+  useCallback,
   useContext,
   useEffect,
-  useReducer,
-  useCallback,
+  useMemo,
+  useState,
 } from "react";
-import { Session, User } from "@supabase/supabase-js";
-import { supabase, Profile, UserRole } from "@/lib/supabase";
-import { getProfile } from "@/lib/auth";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import type { DriverApprovalStatus, DriverRow, Profile, UserRole } from "@/lib/types";
 
-// ─── State & Actions ──────────────────────────────────────────
-
-interface AuthState {
+type AuthContextValue = {
+  initialized: boolean;
+  profileLoading: boolean;
   session: Session | null;
   user: User | null;
   profile: Profile | null;
-  isLoading: boolean;
-  isAuthenticated: boolean;
-}
-
-type AuthAction =
-  | { type: "SET_LOADING"; payload: boolean }
-  | { type: "SET_SESSION"; payload: { session: Session | null; user: User | null } }
-  | { type: "SET_PROFILE"; payload: Profile | null }
-  | { type: "SIGN_OUT" };
-
-function authReducer(state: AuthState, action: AuthAction): AuthState {
-  switch (action.type) {
-    case "SET_LOADING":
-      return { ...state, isLoading: action.payload };
-    case "SET_SESSION":
-      return {
-        ...state,
-        session: action.payload.session,
-        user: action.payload.user,
-        isAuthenticated: !!action.payload.session,
-        isLoading: false,
-      };
-    case "SET_PROFILE":
-      return { ...state, profile: action.payload };
-    case "SIGN_OUT":
-      return {
-        session: null,
-        user: null,
-        profile: null,
-        isLoading: false,
-        isAuthenticated: false,
-      };
-    default:
-      return state;
-  }
-}
-
-// ─── Context ─────────────────────────────────────────────────
-
-interface AuthContextValue extends AuthState {
+  driverApproval: DriverApprovalStatus | null;
+  configError: string | null;
   refreshProfile: () => Promise<void>;
-  signOut: () => Promise<void>;
-}
+};
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-// ─── Provider ────────────────────────────────────────────────
+async function fetchProfile(userId: string): Promise<Profile | null> {
+  const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
+  if (error) throw error;
+  return data as Profile | null;
+}
+
+async function fetchDriverApproval(userId: string): Promise<DriverApprovalStatus | null> {
+  const { data, error } = await supabase
+    .from("drivers")
+    .select("approval_status")
+    .eq("id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return (data as DriverRow).approval_status;
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = useReducer(authReducer, {
-    session: null,
-    user: null,
-    profile: null,
-    isLoading: true,
-    isAuthenticated: false,
-  });
+  const [initialized, setInitialized] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [driverApproval, setDriverApproval] = useState<DriverApprovalStatus | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
 
-  const loadProfile = useCallback(async (userId: string) => {
+  const loadProfileForUser = useCallback(async (userId: string | undefined) => {
+    if (!userId) {
+      setProfile(null);
+      setDriverApproval(null);
+      setProfileLoading(false);
+      return;
+    }
+    setProfileLoading(true);
     try {
-      const profile = await getProfile(userId);
-      dispatch({ type: "SET_PROFILE", payload: profile });
-    } catch (error) {
-      console.error("Error loading profile:", error);
-      dispatch({ type: "SET_PROFILE", payload: null });
+      const p = await fetchProfile(userId);
+      setProfile(p);
+      if (p?.role === "driver") {
+        const status = await fetchDriverApproval(userId);
+        setDriverApproval(status);
+      } else {
+        setDriverApproval(null);
+      }
+    } catch (e) {
+      console.error("[Lets Go] Profile load failed:", e);
+      setProfile(null);
+      setDriverApproval(null);
+    } finally {
+      setProfileLoading(false);
     }
   }, []);
 
   const refreshProfile = useCallback(async () => {
-    if (state.user?.id) {
-      await loadProfile(state.user.id);
-    }
-  }, [state.user?.id, loadProfile]);
-
-  const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
-    dispatch({ type: "SIGN_OUT" });
-  }, []);
+    const uid = session?.user?.id;
+    await loadProfileForUser(uid);
+  }, [loadProfileForUser, session?.user?.id]);
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      dispatch({
-        type: "SET_SESSION",
-        payload: { session, user: session?.user ?? null },
-      });
-      if (session?.user) {
-        loadProfile(session.user.id);
+    let cancelled = false;
+
+    async function boot() {
+      if (!isSupabaseConfigured) {
+        if (!cancelled) {
+          setConfigError(
+            "Add EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY to .env (see .env.example)."
+          );
+          setInitialized(true);
+        }
+        return;
       }
+
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        if (cancelled) return;
+        setSession(data.session);
+        await loadProfileForUser(data.session?.user?.id);
+      } catch (e) {
+        if (!cancelled) {
+          console.error("[Lets Go] Session restore failed:", e);
+          setSession(null);
+          setProfile(null);
+          setDriverApproval(null);
+        }
+      } finally {
+        if (!cancelled) setInitialized(true);
+      }
+    }
+
+    void boot();
+
+    if (!isSupabaseConfigured) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+      setSession(nextSession);
+      await loadProfileForUser(nextSession?.user?.id);
     });
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        dispatch({
-          type: "SET_SESSION",
-          payload: { session, user: session?.user ?? null },
-        });
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, [loadProfileForUser]);
 
-        if (session?.user) {
-          await loadProfile(session.user.id);
-        } else {
-          dispatch({ type: "SET_PROFILE", payload: null });
-        }
-      }
-    );
-
-    return () => subscription.unsubscribe();
-  }, [loadProfile]);
-
-  return (
-    <AuthContext.Provider value={{ ...state, refreshProfile, signOut }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      initialized,
+      profileLoading,
+      session,
+      user: session?.user ?? null,
+      profile,
+      driverApproval,
+      configError,
+      refreshProfile,
+    }),
+    [initialized, profileLoading, session, profile, driverApproval, configError, refreshProfile]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-// ─── Hook ────────────────────────────────────────────────────
-
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error("useAuth must be used within an AuthProvider");
+export function useAuthContext(): AuthContextValue {
+  const ctx = useContext(AuthContext);
+  if (!ctx) {
+    throw new Error("useAuthContext must be used within AuthProvider");
   }
-  return context;
+  return ctx;
 }
 
-export default AuthContext;
+export type { UserRole };

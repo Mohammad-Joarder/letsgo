@@ -1,88 +1,73 @@
-import React, { useEffect } from "react";
-import { Stack, router } from "expo-router";
-import { StatusBar } from "expo-status-bar";
-import * as SplashScreen from "expo-splash-screen";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
-import {
-  useFonts,
-  Sora_400Regular,
-  Sora_500Medium,
-  Sora_600SemiBold,
-  Sora_700Bold,
-} from "@expo-google-fonts/sora";
+import "../global.css";
+
 import {
   Inter_400Regular,
   Inter_500Medium,
   Inter_600SemiBold,
-  Inter_700Bold,
 } from "@expo-google-fonts/inter";
-import { AuthProvider, useAuth } from "@/context/AuthContext";
-import { COLORS } from "@/lib/constants";
+import { Sora_400Regular, Sora_600SemiBold, Sora_700Bold } from "@expo-google-fonts/sora";
+import { useFonts } from "expo-font";
+import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
+import * as SplashScreen from "expo-splash-screen";
+import { Slot } from "expo-router";
+import { useEffect } from "react";
+import { Text, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { AuthProvider, useAuthContext } from "@/context/AuthContext";
 
 SplashScreen.preventAutoHideAsync();
 
-function RootNavigator() {
-  const { isLoading, isAuthenticated, profile } = useAuth();
+function RootContent() {
+  const { initialized, configError } = useAuthContext();
 
-  useEffect(() => {
-    if (!isLoading) {
-      SplashScreen.hideAsync();
-    }
-  }, [isLoading]);
+  if (!initialized && !configError) {
+    return (
+      <View className="flex-1 items-center justify-center bg-background">
+        <Text className="font-inter text-sm text-textSecondary">Loading…</Text>
+      </View>
+    );
+  }
 
-  useEffect(() => {
-    if (isLoading) return;
+  if (configError) {
+    return (
+      <View className="flex-1 items-center justify-center bg-background px-8">
+        <Text className="font-sora text-center text-xl font-semibold text-text">Configuration needed</Text>
+        <Text className="font-inter mt-3 text-center text-base leading-6 text-textSecondary">
+          {configError}
+        </Text>
+      </View>
+    );
+  }
 
-    if (!isAuthenticated) {
-      router.replace("/(auth)");
-      return;
-    }
-
-    if (!profile) return;
-
-    switch (profile.role) {
-      case "rider":
-        router.replace("/(rider)/home");
-        break;
-      case "driver":
-        router.replace("/(driver)/home");
-        break;
-      case "admin":
-        // Admins use web panel — show message
-        router.replace("/(auth)/admin-web");
-        break;
-    }
-  }, [isLoading, isAuthenticated, profile]);
-
-  return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="(auth)" />
-      <Stack.Screen name="(rider)" />
-      <Stack.Screen name="(driver)" />
-      <Stack.Screen name="+not-found" />
-    </Stack>
-  );
+  return <Slot />;
 }
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
-    Sora_400Regular,
-    Sora_500Medium,
-    Sora_600SemiBold,
-    Sora_700Bold,
     Inter_400Regular,
     Inter_500Medium,
     Inter_600SemiBold,
-    Inter_700Bold,
+    Sora_400Regular,
+    Sora_600SemiBold,
+    Sora_700Bold,
   });
 
-  if (!fontsLoaded) return null;
+  useEffect(() => {
+    if (fontsLoaded) {
+      void SplashScreen.hideAsync();
+    }
+  }, [fontsLoaded]);
+
+  if (!fontsLoaded) {
+    return null;
+  }
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <AuthProvider>
-        <StatusBar style="light" backgroundColor={COLORS.background} />
-        <RootNavigator />
+        <BottomSheetModalProvider>
+          <RootContent />
+        </BottomSheetModalProvider>
       </AuthProvider>
     </GestureHandlerRootView>
   );

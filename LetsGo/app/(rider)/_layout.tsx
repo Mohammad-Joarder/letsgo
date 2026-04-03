@@ -1,77 +1,42 @@
-import React from "react";
-import { Tabs } from "expo-router";
-import { View, Text, StyleSheet } from "react-native";
-import { COLORS, FONTS } from "@/lib/constants";
-
-function TabIcon({
-  focused,
-  icon,
-  label,
-}: {
-  focused: boolean;
-  icon: string;
-  label: string;
-}) {
-  return (
-    <View style={styles.tabItem}>
-      <Text style={[styles.tabIcon, focused && styles.tabIconActive]}>{icon}</Text>
-      <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>{label}</Text>
-    </View>
-  );
-}
+import { Stack, useRouter, useSegments } from "expo-router";
+import { useEffect } from "react";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function RiderLayout() {
+  const router = useRouter();
+  const segments = useSegments();
+  const { initialized, session, profile, profileLoading, configError } = useAuth();
+
+  useEffect(() => {
+    if (!initialized || configError || profileLoading) return;
+    if (session && profile?.role === "rider") return;
+    if (segments[0] !== "(rider)") return;
+    router.replace("/(auth)");
+  }, [initialized, configError, profileLoading, session, profile?.role, segments, router]);
+
+  if (configError || !initialized || profileLoading) {
+    return null;
+  }
+
+  if (!session || profile?.role !== "rider") {
+    return null;
+  }
+
   return (
-    <Tabs
+    <Stack
       screenOptions={{
         headerShown: false,
-        tabBarStyle: {
-          backgroundColor: COLORS.surface,
-          borderTopColor: COLORS.border,
-          borderTopWidth: 1,
-          height: 80,
-          paddingBottom: 16,
-          paddingTop: 8,
-        },
-        tabBarShowLabel: false,
+        contentStyle: { backgroundColor: "#0A0E1A" },
       }}
     >
-      <Tabs.Screen
-        name="home"
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen
+        name="searching"
         options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} icon="🗺️" label="Ride" />
-          ),
+          presentation: "modal",
+          animation: "slide_from_bottom",
         }}
       />
-      <Tabs.Screen
-        name="my-rides"
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} icon="🕐" label="Trips" />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="account"
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} icon="👤" label="Account" />
-          ),
-        }}
-      />
-    </Tabs>
+    </Stack>
   );
 }
-
-const styles = StyleSheet.create({
-  tabItem: { alignItems: "center", gap: 3 },
-  tabIcon: { fontSize: 22, opacity: 0.45 },
-  tabIconActive: { opacity: 1 },
-  tabLabel: {
-    fontFamily: FONTS.interMedium,
-    fontSize: 10,
-    color: COLORS.textMuted,
-  },
-  tabLabelActive: { color: COLORS.primary },
-});

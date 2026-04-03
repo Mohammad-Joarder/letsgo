@@ -1,3 +1,5 @@
-// hooks/useAuth.ts
-// Re-export from context for convenience
-export { useAuth } from "@/context/AuthContext";
+import { useAuthContext } from "@/context/AuthContext";
+
+export function useAuth() {
+  return useAuthContext();
+}
