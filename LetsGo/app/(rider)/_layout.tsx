@@ -7,14 +7,20 @@ export default function RiderLayout() {
   const segments = useSegments();
   const { initialized, session, profile, profileLoading, configError } = useAuth();
 
+  // Token refresh / auth events re-run profile fetch with profileLoading=true. If we already
+  // know this user is a rider, keep the stack mounted — otherwise the whole group returns null
+  // and navigation after "Book" shows a blank screen.
+  const riderKnown = Boolean(session && profile?.role === "rider");
+  const blockUntilProfileKnown = profileLoading && !riderKnown;
+
   useEffect(() => {
-    if (!initialized || configError || profileLoading) return;
+    if (!initialized || configError || blockUntilProfileKnown) return;
     if (session && profile?.role === "rider") return;
     if (segments[0] !== "(rider)") return;
     router.replace("/(auth)");
-  }, [initialized, configError, profileLoading, session, profile?.role, segments, router]);
+  }, [initialized, configError, blockUntilProfileKnown, session, profile?.role, segments, router]);
 
-  if (configError || !initialized || profileLoading) {
+  if (configError || !initialized || blockUntilProfileKnown) {
     return null;
   }
 

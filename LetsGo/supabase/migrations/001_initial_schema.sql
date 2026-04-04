@@ -1,6 +1,10 @@
 -- ============================================================================
 -- Lets Go — Initial schema (Phase 1)
 -- PostGIS + full enums, tables, timestamps, RLS on every table
+--
+-- Idempotent: safe to re-run on a DB that already has this schema (e.g. CLI
+-- replay). Skips existing enums/tables/indexes; recreates triggers & Phase-1
+-- RLS policies. Later migrations (002+) are not undone — apply them separately.
 -- ============================================================================
 
 -- Extensions
@@ -8,75 +12,140 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "postgis";
 
 -- -----------------------------------------------------------------------------
--- ENUM types
+-- ENUM types (idempotent — safe if types already exist from a prior run)
 -- -----------------------------------------------------------------------------
-CREATE TYPE public.user_role AS ENUM ('rider', 'driver', 'admin');
+DO $$
+BEGIN
+  CREATE TYPE public.user_role AS ENUM ('rider', 'driver', 'admin');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TYPE public.driver_status AS ENUM ('online', 'offline', 'on_trip');
+DO $$
+BEGIN
+  CREATE TYPE public.driver_status AS ENUM ('online', 'offline', 'on_trip');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TYPE public.driver_approval_status AS ENUM (
-  'pending',
-  'under_review',
-  'approved',
-  'rejected',
-  'suspended'
-);
+DO $$
+BEGIN
+  CREATE TYPE public.driver_approval_status AS ENUM (
+    'pending',
+    'under_review',
+    'approved',
+    'rejected',
+    'suspended'
+  );
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TYPE public.trip_status AS ENUM (
-  'searching',
-  'driver_accepted',
-  'driver_arrived',
-  'in_progress',
-  'completed',
-  'cancelled',
-  'no_driver_found'
-);
+DO $$
+BEGIN
+  CREATE TYPE public.trip_status AS ENUM (
+    'searching',
+    'driver_accepted',
+    'driver_arrived',
+    'in_progress',
+    'completed',
+    'cancelled',
+    'no_driver_found'
+  );
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TYPE public.ride_type AS ENUM ('economy', 'comfort', 'premium', 'xl');
+DO $$
+BEGIN
+  CREATE TYPE public.ride_type AS ENUM ('economy', 'comfort', 'premium', 'xl');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TYPE public.payment_status AS ENUM (
-  'pending',
-  'authorised',
-  'captured',
-  'refunded',
-  'failed'
-);
+DO $$
+BEGIN
+  CREATE TYPE public.payment_status AS ENUM (
+    'pending',
+    'authorised',
+    'captured',
+    'refunded',
+    'failed'
+  );
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TYPE public.payment_method_type AS ENUM ('card', 'wallet', 'cash');
+DO $$
+BEGIN
+  CREATE TYPE public.payment_method_type AS ENUM ('card', 'wallet', 'cash');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TYPE public.vehicle_category AS ENUM ('sedan', 'suv', 'van', 'luxury');
+DO $$
+BEGIN
+  CREATE TYPE public.vehicle_category AS ENUM ('sedan', 'suv', 'van', 'luxury');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TYPE public.cancellation_reason AS ENUM (
-  'rider_cancelled',
-  'driver_cancelled',
-  'no_show',
-  'app_issue'
-);
+DO $$
+BEGIN
+  CREATE TYPE public.cancellation_reason AS ENUM (
+    'rider_cancelled',
+    'driver_cancelled',
+    'no_show',
+    'app_issue'
+  );
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TYPE public.document_type AS ENUM (
-  'license_front',
-  'license_back',
-  'vehicle_registration',
-  'insurance',
-  'profile_photo',
-  'vehicle_photo'
-);
+DO $$
+BEGIN
+  CREATE TYPE public.document_type AS ENUM (
+    'license_front',
+    'license_back',
+    'vehicle_registration',
+    'insurance',
+    'profile_photo',
+    'vehicle_photo'
+  );
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TYPE public.discount_type AS ENUM ('percent', 'fixed');
+DO $$
+BEGIN
+  CREATE TYPE public.discount_type AS ENUM ('percent', 'fixed');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TYPE public.support_ticket_status AS ENUM (
-  'open',
-  'in_progress',
-  'resolved',
-  'closed'
-);
+DO $$
+BEGIN
+  CREATE TYPE public.support_ticket_status AS ENUM (
+    'open',
+    'in_progress',
+    'resolved',
+    'closed'
+  );
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TYPE public.payout_status AS ENUM (
-  'pending',
-  'processing',
-  'paid',
-  'failed'
-);
+DO $$
+BEGIN
+  CREATE TYPE public.payout_status AS ENUM (
+    'pending',
+    'processing',
+    'paid',
+    'failed'
+  );
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 -- -----------------------------------------------------------------------------
 -- Helper: updated_at trigger
@@ -94,7 +163,7 @@ $$;
 -- -----------------------------------------------------------------------------
 -- 1. profiles
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.profiles (
+CREATE TABLE IF NOT EXISTS public.profiles (
   id uuid PRIMARY KEY REFERENCES auth.users (id) ON DELETE CASCADE,
   role public.user_role NOT NULL DEFAULT 'rider'::public.user_role,
   full_name text,
@@ -108,9 +177,10 @@ CREATE TABLE public.profiles (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX profiles_role_idx ON public.profiles (role);
-CREATE INDEX profiles_email_idx ON public.profiles (email);
+CREATE INDEX IF NOT EXISTS profiles_role_idx ON public.profiles (role);
+CREATE INDEX IF NOT EXISTS profiles_email_idx ON public.profiles (email);
 
+DROP TRIGGER IF EXISTS profiles_set_updated_at ON public.profiles;
 CREATE TRIGGER profiles_set_updated_at
 BEFORE UPDATE ON public.profiles
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -136,7 +206,7 @@ $$;
 -- -----------------------------------------------------------------------------
 -- 2. riders
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.riders (
+CREATE TABLE IF NOT EXISTS public.riders (
   id uuid PRIMARY KEY REFERENCES public.profiles (id) ON DELETE CASCADE,
   rating numeric(3, 2) NOT NULL DEFAULT 5.0
     CHECK (rating >= 1 AND rating <= 5),
@@ -150,6 +220,7 @@ CREATE TABLE public.riders (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+DROP TRIGGER IF EXISTS riders_set_updated_at ON public.riders;
 CREATE TRIGGER riders_set_updated_at
 BEFORE UPDATE ON public.riders
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -157,7 +228,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 3. drivers
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.drivers (
+CREATE TABLE IF NOT EXISTS public.drivers (
   id uuid PRIMARY KEY REFERENCES public.profiles (id) ON DELETE CASCADE,
   rating numeric(3, 2) NOT NULL DEFAULT 5.0
     CHECK (rating >= 1 AND rating <= 5),
@@ -179,10 +250,11 @@ CREATE TABLE public.drivers (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX drivers_approval_idx ON public.drivers (approval_status);
-CREATE INDEX drivers_online_idx ON public.drivers (is_online, current_status);
-CREATE INDEX drivers_location_gix ON public.drivers USING GIST (current_location);
+CREATE INDEX IF NOT EXISTS drivers_approval_idx ON public.drivers (approval_status);
+CREATE INDEX IF NOT EXISTS drivers_online_idx ON public.drivers (is_online, current_status);
+CREATE INDEX IF NOT EXISTS drivers_location_gix ON public.drivers USING GIST (current_location);
 
+DROP TRIGGER IF EXISTS drivers_set_updated_at ON public.drivers;
 CREATE TRIGGER drivers_set_updated_at
 BEFORE UPDATE ON public.drivers
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -190,7 +262,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 4. vehicles
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.vehicles (
+CREATE TABLE IF NOT EXISTS public.vehicles (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid (),
   driver_id uuid NOT NULL REFERENCES public.drivers (id) ON DELETE CASCADE,
   make text NOT NULL,
@@ -208,8 +280,9 @@ CREATE TABLE public.vehicles (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX vehicles_driver_id_idx ON public.vehicles (driver_id);
+CREATE INDEX IF NOT EXISTS vehicles_driver_id_idx ON public.vehicles (driver_id);
 
+DROP TRIGGER IF EXISTS vehicles_set_updated_at ON public.vehicles;
 CREATE TRIGGER vehicles_set_updated_at
 BEFORE UPDATE ON public.vehicles
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -217,7 +290,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 5. driver_documents
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.driver_documents (
+CREATE TABLE IF NOT EXISTS public.driver_documents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid (),
   driver_id uuid NOT NULL REFERENCES public.drivers (id) ON DELETE CASCADE,
   document_type public.document_type NOT NULL,
@@ -230,8 +303,9 @@ CREATE TABLE public.driver_documents (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX driver_documents_driver_idx ON public.driver_documents (driver_id);
+CREATE INDEX IF NOT EXISTS driver_documents_driver_idx ON public.driver_documents (driver_id);
 
+DROP TRIGGER IF EXISTS driver_documents_set_updated_at ON public.driver_documents;
 CREATE TRIGGER driver_documents_set_updated_at
 BEFORE UPDATE ON public.driver_documents
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -239,7 +313,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 6. trips
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.trips (
+CREATE TABLE IF NOT EXISTS public.trips (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid (),
   rider_id uuid NOT NULL REFERENCES public.riders (id) ON DELETE RESTRICT,
   driver_id uuid REFERENCES public.drivers (id) ON DELETE SET NULL,
@@ -283,11 +357,12 @@ CREATE TABLE public.trips (
   )
 );
 
-CREATE INDEX trips_rider_idx ON public.trips (rider_id);
-CREATE INDEX trips_driver_idx ON public.trips (driver_id);
-CREATE INDEX trips_status_idx ON public.trips (status);
-CREATE INDEX trips_created_idx ON public.trips (created_at DESC);
+CREATE INDEX IF NOT EXISTS trips_rider_idx ON public.trips (rider_id);
+CREATE INDEX IF NOT EXISTS trips_driver_idx ON public.trips (driver_id);
+CREATE INDEX IF NOT EXISTS trips_status_idx ON public.trips (status);
+CREATE INDEX IF NOT EXISTS trips_created_idx ON public.trips (created_at DESC);
 
+DROP TRIGGER IF EXISTS trips_set_updated_at ON public.trips;
 CREATE TRIGGER trips_set_updated_at
 BEFORE UPDATE ON public.trips
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -295,7 +370,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 7. trip_locations
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.trip_locations (
+CREATE TABLE IF NOT EXISTS public.trip_locations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid (),
   trip_id uuid NOT NULL REFERENCES public.trips (id) ON DELETE CASCADE,
   lat numeric NOT NULL,
@@ -305,8 +380,9 @@ CREATE TABLE public.trip_locations (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX trip_locations_trip_recorded_idx ON public.trip_locations (trip_id, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS trip_locations_trip_recorded_idx ON public.trip_locations (trip_id, recorded_at DESC);
 
+DROP TRIGGER IF EXISTS trip_locations_set_updated_at ON public.trip_locations;
 CREATE TRIGGER trip_locations_set_updated_at
 BEFORE UPDATE ON public.trip_locations
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -314,7 +390,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 8. fare_config
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.fare_config (
+CREATE TABLE IF NOT EXISTS public.fare_config (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid (),
   ride_type public.ride_type NOT NULL UNIQUE,
   base_fare numeric(12, 2) NOT NULL,
@@ -328,6 +404,7 @@ CREATE TABLE public.fare_config (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+DROP TRIGGER IF EXISTS fare_config_set_updated_at ON public.fare_config;
 CREATE TRIGGER fare_config_set_updated_at
 BEFORE UPDATE ON public.fare_config
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -335,7 +412,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 9. surge_zones
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.surge_zones (
+CREATE TABLE IF NOT EXISTS public.surge_zones (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid (),
   name text NOT NULL,
   polygon jsonb NOT NULL,
@@ -347,6 +424,7 @@ CREATE TABLE public.surge_zones (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+DROP TRIGGER IF EXISTS surge_zones_set_updated_at ON public.surge_zones;
 CREATE TRIGGER surge_zones_set_updated_at
 BEFORE UPDATE ON public.surge_zones
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -354,7 +432,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 10. promotions
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.promotions (
+CREATE TABLE IF NOT EXISTS public.promotions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid (),
   code text NOT NULL UNIQUE,
   discount_type public.discount_type NOT NULL,
@@ -372,6 +450,7 @@ CREATE TABLE public.promotions (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+DROP TRIGGER IF EXISTS promotions_set_updated_at ON public.promotions;
 CREATE TRIGGER promotions_set_updated_at
 BEFORE UPDATE ON public.promotions
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -379,7 +458,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 11. rider_promotions
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.rider_promotions (
+CREATE TABLE IF NOT EXISTS public.rider_promotions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid (),
   rider_id uuid NOT NULL REFERENCES public.riders (id) ON DELETE CASCADE,
   promotion_id uuid NOT NULL REFERENCES public.promotions (id) ON DELETE CASCADE,
@@ -389,9 +468,10 @@ CREATE TABLE public.rider_promotions (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX rider_promotions_rider_idx ON public.rider_promotions (rider_id);
-CREATE INDEX rider_promotions_promo_idx ON public.rider_promotions (promotion_id);
+CREATE INDEX IF NOT EXISTS rider_promotions_rider_idx ON public.rider_promotions (rider_id);
+CREATE INDEX IF NOT EXISTS rider_promotions_promo_idx ON public.rider_promotions (promotion_id);
 
+DROP TRIGGER IF EXISTS rider_promotions_set_updated_at ON public.rider_promotions;
 CREATE TRIGGER rider_promotions_set_updated_at
 BEFORE UPDATE ON public.rider_promotions
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -399,7 +479,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 12. ratings
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.ratings (
+CREATE TABLE IF NOT EXISTS public.ratings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid (),
   trip_id uuid NOT NULL REFERENCES public.trips (id) ON DELETE CASCADE,
   from_user_id uuid NOT NULL REFERENCES public.profiles (id) ON DELETE CASCADE,
@@ -412,9 +492,10 @@ CREATE TABLE public.ratings (
   CONSTRAINT ratings_from_to_distinct CHECK (from_user_id <> to_user_id)
 );
 
-CREATE INDEX ratings_trip_idx ON public.ratings (trip_id);
-CREATE INDEX ratings_to_user_idx ON public.ratings (to_user_id);
+CREATE INDEX IF NOT EXISTS ratings_trip_idx ON public.ratings (trip_id);
+CREATE INDEX IF NOT EXISTS ratings_to_user_idx ON public.ratings (to_user_id);
 
+DROP TRIGGER IF EXISTS ratings_set_updated_at ON public.ratings;
 CREATE TRIGGER ratings_set_updated_at
 BEFORE UPDATE ON public.ratings
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -422,7 +503,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 13. support_tickets
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.support_tickets (
+CREATE TABLE IF NOT EXISTS public.support_tickets (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid (),
   user_id uuid NOT NULL REFERENCES public.profiles (id) ON DELETE CASCADE,
   trip_id uuid REFERENCES public.trips (id) ON DELETE SET NULL,
@@ -436,9 +517,10 @@ CREATE TABLE public.support_tickets (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX support_tickets_user_idx ON public.support_tickets (user_id);
-CREATE INDEX support_tickets_status_idx ON public.support_tickets (status);
+CREATE INDEX IF NOT EXISTS support_tickets_user_idx ON public.support_tickets (user_id);
+CREATE INDEX IF NOT EXISTS support_tickets_status_idx ON public.support_tickets (status);
 
+DROP TRIGGER IF EXISTS support_tickets_set_updated_at ON public.support_tickets;
 CREATE TRIGGER support_tickets_set_updated_at
 BEFORE UPDATE ON public.support_tickets
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -446,7 +528,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 14. notifications
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.notifications (
+CREATE TABLE IF NOT EXISTS public.notifications (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid (),
   user_id uuid NOT NULL REFERENCES public.profiles (id) ON DELETE CASCADE,
   title text NOT NULL,
@@ -458,9 +540,10 @@ CREATE TABLE public.notifications (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX notifications_user_created_idx ON public.notifications (user_id, created_at DESC);
-CREATE INDEX notifications_unread_idx ON public.notifications (user_id, is_read);
+CREATE INDEX IF NOT EXISTS notifications_user_created_idx ON public.notifications (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS notifications_unread_idx ON public.notifications (user_id, is_read);
 
+DROP TRIGGER IF EXISTS notifications_set_updated_at ON public.notifications;
 CREATE TRIGGER notifications_set_updated_at
 BEFORE UPDATE ON public.notifications
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -468,7 +551,7 @@ FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
 -- -----------------------------------------------------------------------------
 -- 15. driver_earnings_summary
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.driver_earnings_summary (
+CREATE TABLE IF NOT EXISTS public.driver_earnings_summary (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid (),
   driver_id uuid NOT NULL REFERENCES public.drivers (id) ON DELETE CASCADE,
   week_start date NOT NULL,
@@ -484,8 +567,9 @@ CREATE TABLE public.driver_earnings_summary (
   UNIQUE (driver_id, week_start)
 );
 
-CREATE INDEX driver_earnings_summary_driver_idx ON public.driver_earnings_summary (driver_id);
+CREATE INDEX IF NOT EXISTS driver_earnings_summary_driver_idx ON public.driver_earnings_summary (driver_id);
 
+DROP TRIGGER IF EXISTS driver_earnings_summary_set_updated_at ON public.driver_earnings_summary;
 CREATE TRIGGER driver_earnings_summary_set_updated_at
 BEFORE UPDATE ON public.driver_earnings_summary
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -508,6 +592,58 @@ ALTER TABLE public.ratings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.support_tickets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.driver_earnings_summary ENABLE ROW LEVEL SECURITY;
+
+-- -----------------------------------------------------------------------------
+-- Drop Phase 1 policies if re-running (later migrations may add more policies)
+-- -----------------------------------------------------------------------------
+DROP POLICY IF EXISTS profiles_select_own_or_admin ON public.profiles;
+DROP POLICY IF EXISTS profiles_insert_own ON public.profiles;
+DROP POLICY IF EXISTS profiles_update_own_or_admin ON public.profiles;
+DROP POLICY IF EXISTS riders_select_own_or_admin ON public.riders;
+DROP POLICY IF EXISTS riders_insert_own ON public.riders;
+DROP POLICY IF EXISTS riders_update_own_or_admin ON public.riders;
+DROP POLICY IF EXISTS drivers_select_own_or_admin ON public.drivers;
+DROP POLICY IF EXISTS drivers_insert_own ON public.drivers;
+DROP POLICY IF EXISTS drivers_update_own_or_admin ON public.drivers;
+DROP POLICY IF EXISTS vehicles_select_driver_or_admin ON public.vehicles;
+DROP POLICY IF EXISTS vehicles_insert_driver_or_admin ON public.vehicles;
+DROP POLICY IF EXISTS vehicles_update_driver_or_admin ON public.vehicles;
+DROP POLICY IF EXISTS vehicles_delete_driver_or_admin ON public.vehicles;
+DROP POLICY IF EXISTS driver_documents_select_driver_or_admin ON public.driver_documents;
+DROP POLICY IF EXISTS driver_documents_insert_driver_or_admin ON public.driver_documents;
+DROP POLICY IF EXISTS driver_documents_update_driver_or_admin ON public.driver_documents;
+DROP POLICY IF EXISTS driver_documents_delete_driver_or_admin ON public.driver_documents;
+DROP POLICY IF EXISTS trips_select_participants_or_admin ON public.trips;
+DROP POLICY IF EXISTS trips_insert_rider ON public.trips;
+DROP POLICY IF EXISTS trips_update_participants_or_admin ON public.trips;
+DROP POLICY IF EXISTS trips_delete_admin_only ON public.trips;
+DROP POLICY IF EXISTS trip_locations_select_trip_participant_or_admin ON public.trip_locations;
+DROP POLICY IF EXISTS trip_locations_insert_trip_participant_or_admin ON public.trip_locations;
+DROP POLICY IF EXISTS trip_locations_update_trip_participant_or_admin ON public.trip_locations;
+DROP POLICY IF EXISTS trip_locations_delete_admin_only ON public.trip_locations;
+DROP POLICY IF EXISTS fare_config_select_authenticated ON public.fare_config;
+DROP POLICY IF EXISTS fare_config_all_admin ON public.fare_config;
+DROP POLICY IF EXISTS surge_zones_select_authenticated ON public.surge_zones;
+DROP POLICY IF EXISTS surge_zones_all_admin ON public.surge_zones;
+DROP POLICY IF EXISTS promotions_select_authenticated ON public.promotions;
+DROP POLICY IF EXISTS promotions_all_admin ON public.promotions;
+DROP POLICY IF EXISTS rider_promotions_select_own_or_admin ON public.rider_promotions;
+DROP POLICY IF EXISTS rider_promotions_insert_own_or_admin ON public.rider_promotions;
+DROP POLICY IF EXISTS rider_promotions_update_admin_only ON public.rider_promotions;
+DROP POLICY IF EXISTS rider_promotions_delete_admin_only ON public.rider_promotions;
+DROP POLICY IF EXISTS ratings_select_involved_or_admin ON public.ratings;
+DROP POLICY IF EXISTS ratings_insert_from_self ON public.ratings;
+DROP POLICY IF EXISTS ratings_update_admin_only ON public.ratings;
+DROP POLICY IF EXISTS ratings_delete_admin_only ON public.ratings;
+DROP POLICY IF EXISTS support_tickets_select_own_or_admin ON public.support_tickets;
+DROP POLICY IF EXISTS support_tickets_insert_own ON public.support_tickets;
+DROP POLICY IF EXISTS support_tickets_update_own_or_admin ON public.support_tickets;
+DROP POLICY IF EXISTS support_tickets_delete_admin_only ON public.support_tickets;
+DROP POLICY IF EXISTS notifications_select_own ON public.notifications;
+DROP POLICY IF EXISTS notifications_update_own_or_admin ON public.notifications;
+DROP POLICY IF EXISTS notifications_insert_admin_only ON public.notifications;
+DROP POLICY IF EXISTS driver_earnings_summary_select_own_or_admin ON public.driver_earnings_summary;
+DROP POLICY IF EXISTS driver_earnings_summary_all_admin ON public.driver_earnings_summary;
 
 -- -----------------------------------------------------------------------------
 -- RLS: profiles

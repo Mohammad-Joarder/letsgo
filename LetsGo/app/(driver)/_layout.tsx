@@ -1,5 +1,4 @@
-import { Ionicons } from "@expo/vector-icons";
-import { Tabs, useRouter, useSegments } from "expo-router";
+import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -8,8 +7,14 @@ export default function DriverLayout() {
   const segments = useSegments();
   const { initialized, session, profile, profileLoading, driverApproval, configError } = useAuth();
 
+  const driverGateOk =
+    Boolean(session) &&
+    profile?.role === "driver" &&
+    driverApproval === "approved";
+  const blockUntilProfileKnown = profileLoading && !driverGateOk;
+
   useEffect(() => {
-    if (!initialized || configError || profileLoading) return;
+    if (!initialized || configError || blockUntilProfileKnown) return;
 
     if (!session) {
       if (segments[0] !== "(driver)") return;
@@ -27,7 +32,7 @@ export default function DriverLayout() {
   }, [
     initialized,
     configError,
-    profileLoading,
+    blockUntilProfileKnown,
     session,
     profile?.role,
     driverApproval,
@@ -35,7 +40,7 @@ export default function DriverLayout() {
     router,
   ]);
 
-  if (configError || !initialized || profileLoading) {
+  if (configError || !initialized || blockUntilProfileKnown) {
     return null;
   }
 
@@ -44,48 +49,16 @@ export default function DriverLayout() {
   }
 
   return (
-    <Tabs
+    <Stack
       screenOptions={{
         headerShown: false,
-        tabBarStyle: {
-          backgroundColor: "#131929",
-          borderTopColor: "#1E2D45",
-          height: 60,
-          paddingBottom: 8,
-          paddingTop: 8,
-        },
-        tabBarActiveTintColor: "#00D4AA",
-        tabBarInactiveTintColor: "#8A94A6",
-        tabBarLabelStyle: { fontFamily: "Inter_500Medium", fontSize: 11 },
+        contentStyle: { backgroundColor: "#0A0E1A" },
       }}
     >
-      <Tabs.Screen
-        name="home"
-        options={{
-          title: "Home",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="speedometer-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="earnings"
-        options={{
-          title: "Earnings",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="wallet-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="account"
-        options={{
-          title: "Account",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person-outline" size={size} color={color} />
-          ),
-        }}
-      />
-    </Tabs>
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="pickup-navigation" />
+      <Stack.Screen name="trip-active" />
+      <Stack.Screen name="trip-summary" />
+    </Stack>
   );
 }

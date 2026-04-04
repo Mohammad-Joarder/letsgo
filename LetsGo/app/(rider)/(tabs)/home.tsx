@@ -4,7 +4,6 @@ import BottomSheet, {
   type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
-import * as Location from "expo-location";
 import type { Href } from "expo-router";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -26,19 +25,13 @@ import { SchedulePicker } from "@/components/rider/SchedulePicker";
 import { Avatar } from "@/components/ui/Avatar";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
+import { useRiderMapLocation } from "@/hooks/useRiderMapLocation";
 import type { FareEstimateOption, NearbyDriver, ResolvedPlace, RideType } from "@/lib/bookingTypes";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
 import { mapDarkStyle } from "@/lib/mapDarkStyle";
 import { createTrip, getFareEstimate, searchNearbyDrivers } from "@/lib/riderEdge";
 
 type Phase = "idle" | "destination" | "ride_options";
-
-const DEFAULT_REGION: Region = {
-  latitude: -33.8688,
-  longitude: 151.2093,
-  latitudeDelta: 0.06,
-  longitudeDelta: 0.06,
-};
 
 export default function RiderHomeScreen() {
   const insets = useSafeAreaInsets();
@@ -47,12 +40,16 @@ export default function RiderHomeScreen() {
   const { profile } = useProfile();
   const mapRef = useRef<MapView>(null);
   const sheetRef = useRef<BottomSheet>(null);
+  const fareEstimateSeq = useRef(0);
 
   const snapPoints = useMemo(() => ["16%", "28%", "78%"], []);
 
   const [phase, setPhase] = useState<Phase>("idle");
-  const [region, setRegion] = useState<Region>(DEFAULT_REGION);
-  const [userCoord, setUserCoord] = useState<{ lat: number; lng: number } | null>(null);
+  const { userCoord, region, setRegion, locationError, recenterMapToUser } = useRiderMapLocation({
+    watch: true,
+    timeIntervalMs: 4000,
+    distanceIntervalM: 10,
+  });
   const [pickup, setPickup] = useState<ResolvedPlace | null>(null);
   const [dropoff, setDropoff] = useState<ResolvedPlace | null>(null);
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
@@ -75,7 +72,6 @@ export default function RiderHomeScreen() {
     discountLabel: string;
   } | null>(null);
   const [booking, setBooking] = useState(false);
-  const [locationError, setLocationError] = useState<string | null>(null);
 
   const surgePulse = useSharedValue(1);
   useEffect(() => {
@@ -99,37 +95,16 @@ export default function RiderHomeScreen() {
   );
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        if (!cancelled) setLocationError("Location permission is needed to show the map.");
-        return;
-      }
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      if (cancelled) return;
-      const lat = loc.coords.latitude;
-      const lng = loc.coords.longitude;
-      setUserCoord({ lat, lng });
-      setRegion({
-        latitude: lat,
-        longitude: lng,
-        latitudeDelta: 0.04,
-        longitudeDelta: 0.04,
-      });
-      setPickup((p) =>
-        p ??
-        ({
-          description: "Current location",
-          lat,
-          lng,
-        } satisfies ResolvedPlace)
-      );
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (!userCoord) return;
+    setPickup((p) => {
+      if (p && p.description !== "Current location") return p;
+      return {
+        description: "Current location",
+        lat: userCoord.lat,
+        lng: userCoord.lng,
+      };
+    });
+  }, [userCoord?.lat, userCoord?.lng]);
 
   useEffect(() => {
     if (phase !== "idle" && phase !== "ride_options") return;
@@ -181,12 +156,13 @@ export default function RiderHomeScreen() {
     if (!pickup || !dropoff) {
       setFareOptions([]);
       setEstimateError(null);
+      setEstimateLoading(false);
       return;
     }
-    let cancelled = false;
-    (async () => {
-      setEstimateLoading(true);
-      setEstimateError(null);
+    const seq = ++fareEstimateSeq.current;
+    setEstimateLoading(true);
+    setEstimateError(null);
+    void (async () => {
       try {
         const res = await getFareEstimate({
           pickup_lat: pickup.lat,
@@ -194,7 +170,7 @@ export default function RiderHomeScreen() {
           dropoff_lat: dropoff.lat,
           dropoff_lng: dropoff.lng,
         });
-        if (cancelled) return;
+        if (seq !== fareEstimateSeq.current) return;
         if (!res.ok || !res.options?.length) {
           setEstimateError(res.error ?? "Could not estimate fare.");
           setFareOptions([]);
@@ -206,13 +182,17 @@ export default function RiderHomeScreen() {
         setSurgeActive(Boolean(res.surge_active));
         setSurgeMultiplier(res.surge_multiplier ?? 1);
       } catch (e) {
-        if (!cancelled) setEstimateError(e instanceof Error ? e.message : "Estimate failed.");
+        if (seq !== fareEstimateSeq.current) return;
+        setEstimateError(e instanceof Error ? e.message : "Estimate failed.");
       } finally {
-        if (!cancelled) setEstimateLoading(false);
+        if (seq === fareEstimateSeq.current) {
+          setEstimateLoading(false);
+        }
       }
     })();
     return () => {
-      cancelled = true;
+      fareEstimateSeq.current += 1;
+      setEstimateLoading(false);
     };
   }, [pickup, dropoff]);
 
@@ -267,7 +247,7 @@ export default function RiderHomeScreen() {
     if (!pickup || !dropoff || !selectedOption || !user?.id) return;
     setBooking(true);
     try {
-      const res = await createTrip({
+      const tripPayload = {
         ride_type: selectedRideType,
         pickup_address: pickup.description,
         dropoff_address: dropoff.description,
@@ -286,8 +266,9 @@ export default function RiderHomeScreen() {
         notes: notes.trim() || null,
         scheduled_for:
           scheduleEnabled && scheduledFor ? scheduledFor.toISOString() : null,
-        payment_method: "card",
-      });
+        payment_method: "card" as const,
+      };
+      const res = await createTrip(tripPayload);
       if (!res.ok || !res.trip_id) {
         throw new Error(res.error ?? "Could not create trip.");
       }
@@ -392,6 +373,17 @@ export default function RiderHomeScreen() {
         </View>
       ) : null}
 
+      {mapReady && userCoord ? (
+        <Pressable
+          accessibilityLabel="Center map on my location"
+          onPress={() => recenterMapToUser(mapRef)}
+          className="absolute right-4 h-12 w-12 items-center justify-center rounded-full border border-border bg-background/90 shadow-lg"
+          style={{ bottom: insets.bottom + 200 }}
+        >
+          <Ionicons name="locate" size={22} color="#00D4AA" />
+        </Pressable>
+      ) : null}
+
       <BottomSheet
         ref={sheetRef}
         index={0}
@@ -494,6 +486,7 @@ export default function RiderHomeScreen() {
         initialPickup={pickup}
         initialDropoff={dropoff}
         onConfirm={onConfirmRoute}
+        userLocation={userCoord}
       />
 
       <SchedulePicker

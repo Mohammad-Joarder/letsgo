@@ -12,6 +12,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { ResolvedPlace } from "@/lib/bookingTypes";
+import {
+  geocodeQueryToPlaces,
+  looksLikeNumericPostcodeQuery,
+  reverseGeocodeLabel,
+} from "@/lib/googleGeocoding";
 import { getGoogleMapsApiKey } from "@/lib/mapsConfig";
 import { Button } from "@/components/ui/Button";
 
@@ -25,9 +30,18 @@ type Props = {
   initialPickup: ResolvedPlace | null;
   initialDropoff: ResolvedPlace | null;
   onConfirm: (pickup: ResolvedPlace, dropoff: ResolvedPlace) => void;
+  /** Biases search & geocode toward this point (user GPS). */
+  userLocation?: { lat: number; lng: number } | null;
 };
 
-type Prediction = { id: string; description: string; main: string; secondary: string };
+type Prediction = {
+  id: string;
+  description: string;
+  main: string;
+  secondary: string;
+  /** When set, selection skips Place Details (e.g. geocoded postcode). */
+  resolved?: ResolvedPlace;
+};
 
 export function DestinationSearch({
   visible,
@@ -35,6 +49,7 @@ export function DestinationSearch({
   initialPickup,
   initialDropoff,
   onConfirm,
+  userLocation,
 }: Props) {
   const [focus, setFocus] = useState<"pickup" | "dropoff">("dropoff");
   const [pickupQ, setPickupQ] = useState(initialPickup?.description ?? "");
@@ -51,6 +66,17 @@ export function DestinationSearch({
 
   useEffect(() => {
     if (!visible) return;
+    setPickupQ(initialPickup?.description ?? "");
+    setDropQ(initialDropoff?.description ?? "");
+    setPickupPlace(initialPickup);
+    setDropPlace(initialDropoff);
+    setFocus("dropoff");
+    setPreds([]);
+    setError(null);
+  }, [visible, initialPickup, initialDropoff]);
+
+  useEffect(() => {
+    if (!visible) return;
     void AsyncStorage.getItem(RECENT_KEY).then((raw) => {
       if (!raw) return;
       try {
@@ -64,50 +90,78 @@ export function DestinationSearch({
 
   const saveRecent = useCallback(async (p: ResolvedPlace) => {
     const entry: RecentEntry = { ...p, description: p.description };
-    const next = [entry, ...recent.filter((r) => r.description !== entry.description)].slice(0, 8);
-    setRecent(next);
-    await AsyncStorage.setItem(RECENT_KEY, JSON.stringify(next));
-  }, [recent]);
+    setRecent((prev) => {
+      const next = [entry, ...prev.filter((r) => r.description !== entry.description)].slice(0, 8);
+      void AsyncStorage.setItem(RECENT_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
-  async function fetchPredictions(input: string) {
-    if (!key || input.trim().length < 2) {
-      setPreds([]);
-      return;
-    }
-    setLoadingPreds(true);
-    setError(null);
-    try {
-      const url =
-        `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input.trim())}` +
-        `&key=${key}&components=country:au&types=address`;
-      const res = await fetch(url);
-      const data = (await res.json()) as {
-        status: string;
-        predictions?: {
-          place_id: string;
-          description: string;
-          structured_formatting?: { main_text: string; secondary_text: string };
-        }[];
-        error_message?: string;
-      };
-      if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
-        throw new Error(data.error_message || data.status);
+  const fetchPredictions = useCallback(
+    async (input: string) => {
+      const q = input.trim();
+      if (!key || q.length < 2) {
+        setPreds([]);
+        return;
       }
-      const list =
-        data.predictions?.map((p) => ({
-          id: p.place_id,
-          description: p.description,
-          main: p.structured_formatting?.main_text ?? p.description,
-          secondary: p.structured_formatting?.secondary_text ?? "",
-        })) ?? [];
-      setPreds(list);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Places search failed");
-      setPreds([]);
-    } finally {
-      setLoadingPreds(false);
-    }
-  }
+      setLoadingPreds(true);
+      setError(null);
+      try {
+        const merged: Prediction[] = [];
+        const near = userLocation ?? undefined;
+
+        if (looksLikeNumericPostcodeQuery(q)) {
+          const places = await geocodeQueryToPlaces(q, { near });
+          places.slice(0, 8).forEach((p, i) => {
+            merged.push({
+              id: `geo:post:${i}:${p.lat}:${p.lng}`,
+              description: p.description,
+              main: q.trim(),
+              secondary: p.description,
+              resolved: p,
+            });
+          });
+          setPreds(merged);
+          return;
+        }
+
+        let acUrl =
+          `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(q)}` +
+          `&key=${key}&types=geocode`;
+        if (near) {
+          acUrl += `&location=${near.lat},${near.lng}&radius=50000`;
+        }
+
+        const res = await fetch(acUrl);
+        const data = (await res.json()) as {
+          status: string;
+          predictions?: {
+            place_id: string;
+            description: string;
+            structured_formatting?: { main_text: string; secondary_text: string };
+          }[];
+          error_message?: string;
+        };
+        if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+          throw new Error(data.error_message || data.status);
+        }
+        const list =
+          data.predictions?.map((p) => ({
+            id: p.place_id,
+            description: p.description,
+            main: p.structured_formatting?.main_text ?? p.description,
+            secondary: p.structured_formatting?.secondary_text ?? "",
+          })) ?? [];
+        setPreds(list);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Places search failed");
+        setPreds([]);
+      } finally {
+        setLoadingPreds(false);
+      }
+    },
+    [key, userLocation]
+  );
 
   async function resolvePlace(pred: Prediction): Promise<ResolvedPlace | null> {
     if (!key) return null;
@@ -133,6 +187,17 @@ export function DestinationSearch({
   }
 
   async function onPickPrediction(pred: Prediction) {
+    if (pred.resolved) {
+      if (focus === "pickup") {
+        setPickupPlace(pred.resolved);
+        setPickupQ(pred.resolved.description);
+      } else {
+        setDropPlace(pred.resolved);
+        setDropQ(pred.resolved.description);
+      }
+      setPreds([]);
+      return;
+    }
     setResolving(true);
     setError(null);
     try {
@@ -163,6 +228,33 @@ export function DestinationSearch({
       setDropQ(entry.description);
     }
     setPreds([]);
+  }
+
+  async function applyUserLocation(field: "pickup" | "dropoff") {
+    if (!userLocation) return;
+    setResolving(true);
+    setError(null);
+    try {
+      const label =
+        (await reverseGeocodeLabel(userLocation.lat, userLocation.lng)) ?? "Current location";
+      const p: ResolvedPlace = {
+        description: label,
+        lat: userLocation.lat,
+        lng: userLocation.lng,
+      };
+      if (field === "pickup") {
+        setPickupPlace(p);
+        setPickupQ(label);
+      } else {
+        setDropPlace(p);
+        setDropQ(label);
+      }
+      setPreds([]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not use current location.");
+    } finally {
+      setResolving(false);
+    }
   }
 
   async function confirm() {
@@ -208,7 +300,7 @@ export function DestinationSearch({
                     void fetchPredictions(t);
                   }}
                   onFocus={() => setFocus("pickup")}
-                  placeholder="Pickup address"
+                  placeholder="Street, city, region, or postcode"
                   placeholderTextColor="#5C6678"
                   className={`font-inter h-12 rounded-xl border px-4 text-sm text-text ${
                     focus === "pickup" ? "border-primary" : "border-border"
@@ -227,13 +319,43 @@ export function DestinationSearch({
                     void fetchPredictions(t);
                   }}
                   onFocus={() => setFocus("dropoff")}
-                  placeholder="Search destination"
+                  placeholder="Anywhere worldwide — city, country, address…"
                   placeholderTextColor="#5C6678"
                   className={`font-inter h-12 rounded-xl border px-4 text-sm text-text ${
                     focus === "dropoff" ? "border-primary" : "border-border"
                   } bg-surface2`}
                 />
               </Pressable>
+
+              {userLocation ? (
+                <View className="mt-3 flex-row flex-wrap gap-2">
+                  <Pressable
+                    onPress={() => void applyUserLocation("pickup")}
+                    disabled={resolving}
+                    className="flex-row items-center rounded-full border border-primary/40 bg-primary/10 px-3 py-2 active:opacity-80"
+                  >
+                    <Ionicons name="navigate" size={16} color="#00D4AA" />
+                    <Text className="font-inter ml-1.5 text-xs font-medium text-primary">
+                      Pickup: my location
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => void applyUserLocation("dropoff")}
+                    disabled={resolving}
+                    className="flex-row items-center rounded-full border border-border px-3 py-2 active:opacity-80"
+                  >
+                    <Ionicons name="flag" size={16} color="#8A94A6" />
+                    <Text className="font-inter ml-1.5 text-xs text-textSecondary">
+                      Drop-off: my location
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
+
+              <Text className="font-inter mt-3 text-xs leading-5 text-textSecondary">
+                Search is worldwide. Suggestions are biased around your current location when available
+                (cities, countries, addresses). Numeric postcodes use geocoding near your area.
+              </Text>
             </View>
 
             {recent.length > 0 && preds.length === 0 && !loadingPreds ? (
@@ -263,6 +385,14 @@ export function DestinationSearch({
                 keyExtractor={(item) => item.id}
                 keyboardShouldPersistTaps="handled"
                 contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}
+                ListEmptyComponent={
+                  !loadingPreds &&
+                  (focus === "pickup" ? pickupQ.trim().length >= 2 : dropQ.trim().length >= 2) ? (
+                    <Text className="font-inter py-4 text-center text-sm text-textSecondary">
+                      No matches. Try a city, country, street, or postcode.
+                    </Text>
+                  ) : null
+                }
                 renderItem={({ item }) => (
                   <Pressable
                     onPress={() => void onPickPrediction(item)}

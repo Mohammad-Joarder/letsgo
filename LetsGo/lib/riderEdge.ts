@@ -4,14 +4,18 @@ import type {
   RideType,
   SearchNearbyResponse,
 } from "@/lib/bookingTypes";
-import { supabase } from "@/lib/supabase";
+import { getUserAccessTokenForEdge, refreshUserAccessTokenForEdge } from "@/lib/accessTokenForEdge";
+import { postEdgeFunctionJson, postEdgeFunctionWithUserJwt } from "@/lib/edgeFunctionFetch";
+import { invokeEdgeFunction } from "@/lib/invokeEdgeFunction";
 
-async function invoke<T>(name: string, body: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke(name, { body });
-  if (error) {
-    throw new Error(error.message ?? `Function ${name} failed`);
-  }
-  return data as T;
+const CREATE_TRIP_TIMEOUT_MS = 45_000;
+
+async function invoke<T>(
+  name: string,
+  body: Record<string, unknown>,
+  opts?: Parameters<typeof invokeEdgeFunction>[2]
+): Promise<T> {
+  return invokeEdgeFunction<T>(name, body, opts);
 }
 
 export async function getFareEstimate(params: {
@@ -20,7 +24,12 @@ export async function getFareEstimate(params: {
   dropoff_lat: number;
   dropoff_lng: number;
 }): Promise<FareEstimateResponse> {
-  return invoke<FareEstimateResponse>("get-fare-estimate", params as unknown as Record<string, unknown>);
+  // Raw fetch + AbortController: avoids supabase-js invoke hanging on some RN builds.
+  return postEdgeFunctionJson<FareEstimateResponse>(
+    "get-fare-estimate",
+    params as unknown as Record<string, unknown>,
+    35_000
+  );
 }
 
 export async function searchNearbyDrivers(params: {
@@ -54,5 +63,34 @@ export type CreateTripPayload = {
 };
 
 export async function createTrip(body: CreateTripPayload): Promise<CreateTripResponse> {
-  return invoke<CreateTripResponse>("create-trip", body as unknown as Record<string, unknown>);
+  const payload = body as unknown as Record<string, unknown>;
+  let token: string;
+  try {
+    token = await getUserAccessTokenForEdge();
+  } catch (e) {
+    const m = e instanceof Error ? e.message : "Sign in required.";
+    throw new Error(m === "Sign in required." ? "Sign in required to book a ride." : m);
+  }
+
+  try {
+    return await postEdgeFunctionWithUserJwt<CreateTripResponse>(
+      "create-trip",
+      payload,
+      token,
+      CREATE_TRIP_TIMEOUT_MS
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    const is401 =
+      msg.includes("(401)") || /invalid jwt/i.test(msg) || /jwt expired/i.test(msg);
+    if (!is401) throw e;
+
+    const t2 = await refreshUserAccessTokenForEdge();
+    return postEdgeFunctionWithUserJwt<CreateTripResponse>(
+      "create-trip",
+      payload,
+      t2,
+      CREATE_TRIP_TIMEOUT_MS
+    );
+  }
 }

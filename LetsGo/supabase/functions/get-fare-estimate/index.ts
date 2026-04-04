@@ -95,13 +95,24 @@ Deno.serve(async (req) => {
       `&destinations=${encodeURIComponent(destinations)}&mode=driving&units=metric&key=${apiKey}`;
 
     const dmRes = await fetch(dmUrl);
-    const dmJson = await dmRes.json();
+    const dmText = await dmRes.text();
+    let dmJson: Record<string, unknown>;
+    try {
+      dmJson = JSON.parse(dmText) as Record<string, unknown>;
+    } catch {
+      return new Response(
+        JSON.stringify({ ok: false, error: "Distance Matrix returned non-JSON response" }),
+        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     if (dmJson.status !== "OK" || !dmJson.rows?.[0]?.elements?.[0]) {
       return new Response(
         JSON.stringify({
           ok: false,
-          error: dmJson.error_message || dmJson.status || "Distance Matrix failed",
+          error:
+            (dmJson.error_message as string) ||
+            String(dmJson.status || "Distance Matrix failed"),
         }),
         { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -120,10 +131,19 @@ Deno.serve(async (req) => {
     const distanceKm = distanceM / 1000;
     const durationMin = Math.max(1, Math.round(durationS / 60));
 
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-    );
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!supabaseUrl || !serviceRoleKey) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in Edge environment",
+        }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     const { data: fareRows, error: fareErr } = await supabase
       .from("fare_config")
@@ -198,9 +218,23 @@ Deno.serve(async (req) => {
     );
   } catch (e) {
     console.error(e);
-    return new Response(
-      JSON.stringify({ ok: false, error: e instanceof Error ? e.message : "Server error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    const error =
+      e instanceof Error
+        ? e.message
+        : e && typeof e === "object" && "message" in e && typeof (e as { message: unknown }).message === "string"
+          ? (e as { message: string }).message
+          : typeof e === "string"
+            ? e
+            : (() => {
+                try {
+                  return JSON.stringify(e);
+                } catch {
+                  return "Server error";
+                }
+              })();
+    return new Response(JSON.stringify({ ok: false, error }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });

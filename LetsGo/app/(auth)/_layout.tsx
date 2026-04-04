@@ -42,11 +42,11 @@ export default function AuthGroupLayout() {
 
     if (profile?.role === "driver") {
       if (driverApproval === "approved") {
-        if (group === "(driver)" && leaf === "home") {
+        if (group === "(driver)") {
           pendingHref.current = null;
           return;
         }
-        nav("/(driver)/home");
+        nav("/(driver)/(tabs)/home" as Href);
         return;
       }
       if (leaf === "driver-review-pending") {

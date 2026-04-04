@@ -8,6 +8,25 @@ import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/lib/supabase";
 
+function riderTripHeadline(status: string | null): string {
+  switch (status) {
+    case "searching":
+      return "Matching you with nearby drivers…";
+    case "driver_accepted":
+      return "A driver accepted — they’re on the way to you.";
+    case "driver_arrived":
+      return "Your driver has arrived at pickup.";
+    case "in_progress":
+      return "Trip in progress.";
+    case "no_driver_found":
+      return "No drivers available right now.";
+    case "cancelled":
+      return "This trip was cancelled.";
+    default:
+      return status ? `Status: ${status.replace(/_/g, " ")}` : "Updating…";
+  }
+}
+
 export default function SearchingScreen() {
   const router = useRouter();
   const { tripId } = useLocalSearchParams<{ tripId: string }>();
@@ -24,6 +43,9 @@ export default function SearchingScreen() {
       setLoading(false);
       return;
     }
+    if (!user?.id) {
+      return;
+    }
     const { data, error: qErr } = await supabase
       .from("trips")
       .select("status, pickup_pin, rider_id")
@@ -34,11 +56,12 @@ export default function SearchingScreen() {
       setLoading(false);
       return;
     }
-    if (!data || data.rider_id !== user?.id) {
+    if (!data || data.rider_id !== user.id) {
       setError("Trip not found.");
       setLoading(false);
       return;
     }
+    setError(null);
     setStatus(data.status);
     setPin(data.pickup_pin);
     setLoading(false);
@@ -50,14 +73,25 @@ export default function SearchingScreen() {
 
   useEffect(() => {
     if (!tripId) return;
-    const id = setInterval(() => void load(), 5000);
+    const id = setInterval(() => void load(), 3000);
     return () => clearInterval(id);
   }, [tripId, load]);
 
   useEffect(() => {
     if (!tripId || !user?.id) return;
+
+    const applyTripPatch = (next: { status?: string; pickup_pin?: string | null }) => {
+      if (next.status) setStatus(next.status);
+      if (next.pickup_pin != null) setPin(next.pickup_pin);
+    };
+
+    // Topic must match Edge `realtimeBroadcast(..., `trip_updates:${tripId}`, "status", payload)`.
     const ch = supabase
-      .channel(`trip:${tripId}`)
+      .channel(`trip_updates:${tripId}`)
+      .on("broadcast", { event: "status" }, ({ payload }) => {
+        const p = payload as { status?: string; pickup_pin?: string };
+        applyTripPatch(p);
+      })
       .on(
         "postgres_changes",
         {
@@ -67,12 +101,11 @@ export default function SearchingScreen() {
           filter: `id=eq.${tripId}`,
         },
         (payload) => {
-          const next = payload.new as { status?: string; pickup_pin?: string };
-          if (next.status) setStatus(next.status);
-          if (next.pickup_pin) setPin(next.pickup_pin);
+          applyTripPatch(payload.new as { status?: string; pickup_pin?: string | null });
         }
       )
       .subscribe();
+
     return () => {
       void supabase.removeChannel(ch);
     };
@@ -125,9 +158,7 @@ export default function SearchingScreen() {
                 <View className="h-16 w-16 rounded-full bg-primary/20" />
               </View>
               <Text className="font-sora text-center text-lg font-semibold text-text">
-                {status === "searching"
-                  ? "Matching you with nearby drivers…"
-                  : `Status: ${status?.replace(/_/g, " ")}`}
+                {riderTripHeadline(status)}
               </Text>
               {pin ? (
                 <Text className="font-inter mt-4 text-center text-sm text-textSecondary">

@@ -1,0 +1,25 @@
+# Per-function Edge settings (merged with project defaults on deploy).
+# Fare preview is used before / without a logged-in user; gateway JWT check would 401.
+[functions.get-fare-estimate]
+verify_jwt = false
+
+# Gateway JWT check can 401 "Invalid JWT" for otherwise valid mobile sessions (relay/signing quirks).
+# This function already validates the user with auth.getUser() + rider profile before any write.
+[functions.create-trip]
+verify_jwt = false
+
+# Same session/JWT edge cases as create-trip; function still validates user + driver_update_location RPC.
+[functions.update-driver-location]
+verify_jwt = false
+
+# Driver accept/reject; validates Bearer + auth.getUser() + driver profile inside the function.
+[functions.assign-driver]
+verify_jwt = false
+
+# Driver completes trip; same internal auth pattern.
+[functions.complete-trip]
+verify_jwt = false
+
+# Driver payout; same internal auth pattern.
+[functions.create-payout]
+verify_jwt = false

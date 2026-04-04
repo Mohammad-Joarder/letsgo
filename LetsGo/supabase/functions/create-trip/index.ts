@@ -1,5 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { runInBackground } from "../_shared/background.ts";
+import { realtimeBroadcast } from "../_shared/realtime_broadcast.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -9,6 +11,11 @@ const corsHeaders: Record<string, string> = {
 function randomPin(): string {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
+
+const DISPATCH_RADIUS_M = 25_000;
+const MAX_CANDIDATES = 25;
+/** PostgREST has no timeout; a slow RPC would block the rider app for minutes. */
+const NEARBY_RPC_CAP_MS = 12_000;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -26,6 +33,7 @@ Deno.serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnon = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
     const userClient = createClient(supabaseUrl, supabaseAnon, {
       global: { headers: { Authorization: authHeader } },
@@ -42,11 +50,11 @@ Deno.serve(async (req) => {
       });
     }
 
-    const admin = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const admin = createClient(supabaseUrl, serviceKey);
 
     const { data: profile, error: pErr } = await admin
       .from("profiles")
-      .select("id, role")
+      .select("id, role, full_name, is_verified")
       .eq("id", user.id)
       .single();
     if (pErr || !profile || profile.role !== "rider") {
@@ -98,6 +106,13 @@ Deno.serve(async (req) => {
       });
     }
 
+    if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "Invalid pickup_lat / pickup_lng (must be finite numbers)" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const riderId = user.id;
     const pickupPin = randomPin();
 
@@ -132,12 +147,94 @@ Deno.serve(async (req) => {
 
     if (tErr) throw tErr;
 
+    const rpcCall = admin.rpc("nearby_drivers_for_ride", {
+      p_lat: pickupLat,
+      p_lng: pickupLng,
+      p_radius_m: DISPATCH_RADIUS_M,
+      p_ride_type: rideType,
+    });
+
+    const [riderResult, nearbyPack] = await Promise.all([
+      admin.from("riders").select("rating").eq("id", riderId).maybeSingle(),
+      Promise.race([
+        rpcCall,
+        new Promise<{ data: null; error: { message: string } }>((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                data: null,
+                error: { message: "nearby_drivers_for_ride exceeded time limit" },
+              }),
+            NEARBY_RPC_CAP_MS
+          )
+        ),
+      ]),
+    ]);
+
+    const { data: nearby, error: nErr } = nearbyPack;
+    if (nErr) {
+      console.error("nearby_drivers_for_ride", nErr.message, {
+        pickupLat,
+        pickupLng,
+        rideType,
+      });
+    }
+
+    const riderRow = riderResult.data;
+    const riderRating = riderRow?.rating != null ? Number(riderRow.rating) : 5;
+
+    const rows = (nearby ?? []) as { driver_id: string; distance_m: number }[];
+    const candidateIds = rows.map((r) => r.driver_id).slice(0, MAX_CANDIDATES);
+
+    const expiresAt = new Date(Date.now() + 15_000).toISOString();
+
+    if (candidateIds.length === 0) {
+      await admin.from("trips").update({ status: "no_driver_found" }).eq("id", trip.id);
+    } else {
+      const firstId = candidateIds[0];
+      await admin
+        .from("trips")
+        .update({
+          offer_candidate_ids: candidateIds,
+          offer_index: 0,
+          offer_driver_id: firstId,
+          offer_expires_at: expiresAt,
+        })
+        .eq("id", trip.id);
+
+      const gross = estFare != null ? Number(estFare) : 0;
+      const fee = platformFee != null ? Number(platformFee) : 0;
+      const estNet = Math.max(0, gross - fee);
+
+      runInBackground(
+        realtimeBroadcast(supabaseUrl, serviceKey, `driver_trip_offers:${firstId}`, "offer", {
+          trip_id: trip.id,
+          ride_type: rideType,
+          pickup_address: pickupAddress,
+          dropoff_address: dropoffAddress,
+          pickup_lat: pickupLat,
+          pickup_lng: pickupLng,
+          dropoff_lat: dropoffLat,
+          dropoff_lng: dropoffLng,
+          estimated_fare: estFare,
+          estimated_distance_km: estKm,
+          estimated_duration_min: estMin,
+          platform_fee: platformFee,
+          estimated_net_earnings: estNet,
+          rider_name: profile.full_name ?? "Rider",
+          rider_rating: riderRating,
+          rider_verified: Boolean(profile.is_verified),
+          offer_expires_at: expiresAt,
+        })
+      );
+    }
+
     return new Response(
       JSON.stringify({
         ok: true,
         trip_id: trip.id,
         pickup_pin: trip.pickup_pin,
-        status: trip.status,
+        status: candidateIds.length === 0 ? "no_driver_found" : trip.status,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
