@@ -5,7 +5,7 @@ import BottomSheet, {
 } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
 import type { Href } from "expo-router";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, Text, View } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE, type Region } from "react-native-maps";
@@ -30,6 +30,7 @@ import type { FareEstimateOption, NearbyDriver, ResolvedPlace, RideType } from "
 import { fetchRoutePolyline } from "@/lib/googleDirections";
 import { mapDarkStyle } from "@/lib/mapDarkStyle";
 import { createTrip, getFareEstimate, searchNearbyDrivers } from "@/lib/riderEdge";
+import { supabase } from "@/lib/supabase";
 
 type Phase = "idle" | "destination" | "ride_options";
 
@@ -43,6 +44,30 @@ export default function RiderHomeScreen() {
   const fareEstimateSeq = useRef(0);
 
   const snapPoints = useMemo(() => ["16%", "28%", "78%"], []);
+
+  const resumeActiveTrip = useCallback(async () => {
+    if (!user?.id) return;
+    const { data } = await supabase
+      .from("trips")
+      .select("id, status")
+      .eq("rider_id", user.id)
+      .in("status", ["searching", "driver_accepted", "driver_arrived", "in_progress"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!data) return;
+    if (data.status === "in_progress") {
+      router.replace(`/(rider)/trip-live?tripId=${data.id}` as Href);
+      return;
+    }
+    router.replace(`/(rider)/searching?tripId=${encodeURIComponent(data.id)}` as Href);
+  }, [user?.id, router]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void resumeActiveTrip();
+    }, [resumeActiveTrip])
+  );
 
   const [phase, setPhase] = useState<Phase>("idle");
   const { userCoord, region, setRegion, locationError, recenterMapToUser } = useRiderMapLocation({

@@ -1,11 +1,13 @@
 import type { Href } from "expo-router";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   Platform,
   Pressable,
+  ScrollView,
   Text,
   TextInput,
   View,
@@ -13,6 +15,7 @@ import {
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { RoutePolyline } from "@/components/rider/RoutePolyline";
+import { StarRatingPicker } from "@/components/shared/StarRatingPicker";
 import { Button } from "@/components/ui/Button";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
 import { mapDarkStyle } from "@/lib/mapDarkStyle";
@@ -82,6 +85,17 @@ export default function TripSummaryScreen() {
     void load();
   }, [load]);
 
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== "android") return undefined;
+      const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+        router.replace("/(driver)/(tabs)/home" as Href);
+        return true;
+      });
+      return () => sub.remove();
+    }, [router])
+  );
+
   async function submitRating() {
     if (!tripId || !riderId) return;
     if (stars < 1) {
@@ -123,6 +137,10 @@ export default function TripSummaryScreen() {
     }
   }
 
+  function skipToHome() {
+    router.replace("/(driver)/(tabs)/home" as Href);
+  }
+
   if (loading) {
     return (
       <View className="flex-1 items-center justify-center bg-background">
@@ -153,7 +171,11 @@ export default function TripSummaryScreen() {
         </View>
       ) : null}
 
-      <View className="flex-1 px-5 pt-4" style={{ paddingBottom: insets.bottom + 16 }}>
+      <ScrollView
+        className="flex-1 px-5 pt-4"
+        contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text className="font-sora-display text-2xl font-bold text-text">Trip complete</Text>
         <Text className="font-inter mt-1 text-sm text-textSecondary">Great work — here is your summary.</Text>
 
@@ -188,12 +210,9 @@ export default function TripSummaryScreen() {
         </View>
 
         <Text className="font-inter mt-6 text-sm font-semibold text-text">Rate rider</Text>
-        <View className="mt-2 flex-row gap-2">
-          {[1, 2, 3, 4, 5].map((n) => (
-            <Pressable key={n} onPress={() => setStars(n)}>
-              <Text className="text-3xl">{n <= stars ? "★" : "☆"}</Text>
-            </Pressable>
-          ))}
+        <Text className="font-inter mt-1 text-xs text-textSecondary">Tap 1–5 stars</Text>
+        <View className="mt-3">
+          <StarRatingPicker value={stars} onChange={setStars} size={44} />
         </View>
 
         <View className="mt-4 flex-row flex-wrap gap-2">
@@ -222,10 +241,11 @@ export default function TripSummaryScreen() {
           className="font-inter mt-4 min-h-[72px] rounded-xl border border-border bg-surface2 p-3 text-sm text-text"
         />
 
-        <View className="mt-6">
+        <View className="mt-6 gap-3">
           <Button title="Submit & back to home" loading={submitting} onPress={() => void submitRating()} />
+          <Button title="Skip rating — go home" variant="ghost" onPress={skipToHome} disabled={submitting} />
         </View>
-      </View>
+      </ScrollView>
     </View>
   );
 }

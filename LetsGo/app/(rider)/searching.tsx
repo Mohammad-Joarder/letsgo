@@ -6,6 +6,7 @@ import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/hooks/useAuth";
+import { removeSupabaseChannelsForTopic } from "@/lib/realtimeChannelTeardown";
 import { supabase } from "@/lib/supabase";
 
 function riderTripHeadline(status: string | null): string {
@@ -72,42 +73,66 @@ export default function SearchingScreen() {
   }, [load]);
 
   useEffect(() => {
+    if (!tripId || loading || !status) return;
+    if (status === "in_progress") {
+      router.replace(`/(rider)/trip-live?tripId=${encodeURIComponent(tripId)}` as Href);
+      return;
+    }
+    if (status === "completed") {
+      router.replace(`/(rider)/trip-complete?tripId=${encodeURIComponent(tripId)}` as Href);
+    }
+  }, [tripId, status, loading, router]);
+
+  useEffect(() => {
     if (!tripId) return;
     const id = setInterval(() => void load(), 3000);
     return () => clearInterval(id);
   }, [tripId, load]);
 
   useEffect(() => {
-    if (!tripId || !user?.id) return;
+    if (!tripId || !user?.id) return undefined;
+    const topic = `trip_updates:${tripId}`;
+    let cancelled = false;
 
     const applyTripPatch = (next: { status?: string; pickup_pin?: string | null }) => {
       if (next.status) setStatus(next.status);
       if (next.pickup_pin != null) setPin(next.pickup_pin);
     };
 
-    // Topic must match Edge `realtimeBroadcast(..., `trip_updates:${tripId}`, "status", payload)`.
-    const ch = supabase
-      .channel(`trip_updates:${tripId}`)
-      .on("broadcast", { event: "status" }, ({ payload }) => {
-        const p = payload as { status?: string; pickup_pin?: string };
-        applyTripPatch(p);
-      })
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "trips",
-          filter: `id=eq.${tripId}`,
-        },
-        (payload) => {
-          applyTripPatch(payload.new as { status?: string; pickup_pin?: string | null });
-        }
-      )
-      .subscribe();
+    async function setup() {
+      await removeSupabaseChannelsForTopic(supabase, topic);
+      if (cancelled) return;
+
+      const ch = supabase
+        .channel(topic)
+        .on("broadcast", { event: "status" }, ({ payload }) => {
+          const p = payload as { status?: string; pickup_pin?: string };
+          applyTripPatch(p);
+        })
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "trips",
+            filter: `id=eq.${tripId}`,
+          },
+          (payload) => {
+            applyTripPatch(payload.new as { status?: string; pickup_pin?: string | null });
+          }
+        )
+        .subscribe();
+
+      if (cancelled) {
+        await supabase.removeChannel(ch);
+      }
+    }
+
+    void setup();
 
     return () => {
-      void supabase.removeChannel(ch);
+      cancelled = true;
+      void removeSupabaseChannelsForTopic(supabase, topic);
     };
   }, [tripId, user?.id]);
 
@@ -135,14 +160,27 @@ export default function SearchingScreen() {
     }
   }
 
+  const canDismissModal = status === "searching" || status === "no_driver_found";
+  const canCancelSearch = status === "searching";
+
   return (
     <SafeAreaWrapper edges={["top", "left", "right", "bottom"]}>
       <View className="flex-1 bg-background px-6">
         <View className="mb-8 mt-4 flex-row items-center justify-between">
           <Text className="font-sora-display text-2xl font-bold text-text">Finding a driver</Text>
-          <Pressable onPress={() => router.back()} hitSlop={12}>
-            <Ionicons name="close" size={28} color="#8A94A6" />
-          </Pressable>
+          {canDismissModal ? (
+            <Pressable
+              onPress={() => {
+                if (router.canGoBack()) router.back();
+                else router.replace("/(rider)/(tabs)/home" as Href);
+              }}
+              hitSlop={12}
+            >
+              <Ionicons name="close" size={28} color="#8A94A6" />
+            </Pressable>
+          ) : (
+            <View style={{ width: 28 }} />
+          )}
         </View>
 
         {loading ? (
@@ -168,14 +206,22 @@ export default function SearchingScreen() {
               ) : null}
             </View>
 
-            <View className="mt-auto pb-8">
-              <Button
-                title="Cancel search"
-                variant="secondary"
-                loading={cancelling}
-                onPress={() => void cancelSearch()}
-              />
-            </View>
+            {canCancelSearch ? (
+              <View className="mt-auto pb-8">
+                <Button
+                  title="Cancel search"
+                  variant="secondary"
+                  loading={cancelling}
+                  onPress={() => void cancelSearch()}
+                />
+              </View>
+            ) : (
+              <View className="mt-auto pb-8">
+                <Text className="font-inter text-center text-xs text-textSecondary">
+                  A driver is on the way — cancel from support if you need help.
+                </Text>
+              </View>
+            )}
           </>
         )}
       </View>

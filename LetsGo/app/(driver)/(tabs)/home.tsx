@@ -20,6 +20,7 @@ import { assignDriver, updateDriverLocation } from "@/lib/driverEdge";
 import type { TripOfferPayload } from "@/lib/driverTypes";
 import { getCurrentPositionReliable } from "@/lib/location";
 import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { removeSupabaseChannelsForTopic } from "@/lib/realtimeChannelTeardown";
 import { supabase } from "@/lib/supabase";
 
 export default function DriverHomeScreen() {
@@ -59,8 +60,6 @@ export default function DriverHomeScreen() {
     transform: [{ scale: pulse.value }],
     opacity: 0.85,
   }));
-
-  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const loadDriverRow = useCallback(async () => {
     if (!user?.id) {
@@ -127,9 +126,11 @@ export default function DriverHomeScreen() {
   );
 
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.id) return undefined;
 
     const uid = user.id;
+    const topic = `driver_trip_offers:${uid}`;
+    let cancelled = false;
 
     async function buildOfferFromTripRow(row: Record<string, unknown>): Promise<TripOfferPayload | null> {
       const tripId = row.id as string;
@@ -163,41 +164,51 @@ export default function DriverHomeScreen() {
       };
     }
 
-    const ch = supabase
-      .channel(`driver_trip_offers:${uid}`)
-      .on("broadcast", { event: "offer" }, ({ payload }) => {
-        const p = payload as TripOfferPayload;
-        if (p?.trip_id) {
-          setOffer(p);
-          setOfferVisible(true);
-        }
-      })
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "trips",
-          filter: `offer_driver_id=eq.${uid}`,
-        },
-        (payload) => {
-          void (async () => {
-            const row = payload.new as Record<string, unknown>;
-            if (row.status !== "searching") return;
-            const built = await buildOfferFromTripRow(row);
-            if (built) {
-              setOffer(built);
-              setOfferVisible(true);
-            }
-          })();
-        }
-      )
-      .subscribe();
+    async function setup() {
+      await removeSupabaseChannelsForTopic(supabase, topic);
+      if (cancelled) return;
 
-    channelRef.current = ch;
+      const ch = supabase
+        .channel(topic)
+        .on("broadcast", { event: "offer" }, ({ payload }) => {
+          const p = payload as TripOfferPayload;
+          if (p?.trip_id) {
+            setOffer(p);
+            setOfferVisible(true);
+          }
+        })
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "trips",
+            filter: `offer_driver_id=eq.${uid}`,
+          },
+          (payload) => {
+            void (async () => {
+              const row = payload.new as Record<string, unknown>;
+              if (row.status !== "searching") return;
+              const built = await buildOfferFromTripRow(row);
+              if (built) {
+                setOffer(built);
+                setOfferVisible(true);
+              }
+            })();
+          }
+        )
+        .subscribe();
+
+      if (cancelled) {
+        await supabase.removeChannel(ch);
+      }
+    }
+
+    void setup();
+
     return () => {
-      void supabase.removeChannel(ch);
-      channelRef.current = null;
+      cancelled = true;
+      void removeSupabaseChannelsForTopic(supabase, topic);
     };
   }, [user?.id]);
 

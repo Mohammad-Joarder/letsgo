@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import type { Href } from "expo-router";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -19,6 +19,7 @@ import { completeTrip } from "@/lib/driverEdge";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
 import { haversineMeters } from "@/lib/geo";
 import { getCurrentPositionReliable, tryGetCurrentPositionReliable } from "@/lib/location";
+import { DEV_END_TRIP_WITHOUT_DROP_OFF } from "@/lib/devTripFlags";
 import { mapDarkStyle } from "@/lib/mapDarkStyle";
 import { supabase } from "@/lib/supabase";
 
@@ -52,6 +53,13 @@ export default function TripActiveScreen() {
   const [elapsed, setElapsed] = useState(0);
   const [loading, setLoading] = useState(true);
   const [ending, setEnding] = useState(false);
+  const [headerCanGoBack, setHeaderCanGoBack] = useState(() => router.canGoBack());
+
+  useFocusEffect(
+    useCallback(() => {
+      setHeaderCanGoBack(router.canGoBack());
+    }, [router])
+  );
 
   const load = useCallback(async () => {
     if (!tripId) return;
@@ -170,7 +178,11 @@ export default function TripActiveScreen() {
     trip && myPos
       ? haversineMeters(myPos.lat, myPos.lng, trip.dropoff_lat, trip.dropoff_lng)
       : Infinity;
-  const canEnd = distDrop <= 300 && pinOk && trip?.status === "in_progress";
+  const nearDropoff = distDrop <= 300;
+  const canEnd =
+    pinOk &&
+    trip?.status === "in_progress" &&
+    (nearDropoff || DEV_END_TRIP_WITHOUT_DROP_OFF);
 
   async function onEndTrip() {
     if (!tripId || !trip) return;
@@ -265,9 +277,18 @@ export default function TripActiveScreen() {
           className="absolute left-4 right-4 flex-row items-center rounded-xl border border-border bg-background/95 px-3 py-2"
           style={{ top: insets.top + 8 }}
         >
-          <Pressable onPress={() => router.back()} hitSlop={12}>
-            <Ionicons name="chevron-back" size={22} color="#E8ECF2" />
-          </Pressable>
+          {headerCanGoBack ? (
+            <Pressable
+              onPress={() => {
+                if (router.canGoBack()) router.back();
+              }}
+              hitSlop={12}
+            >
+              <Ionicons name="chevron-back" size={22} color="#E8ECF2" />
+            </Pressable>
+          ) : (
+            <View style={{ width: 22 }} />
+          )}
           <Text className="font-sora flex-1 text-center text-sm font-semibold text-text">
             To drop-off{etaMin != null ? ` · ~${etaMin} min` : ""}
           </Text>
@@ -286,9 +307,11 @@ export default function TripActiveScreen() {
             Trip time: {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}
           </Text>
           <Text className="font-inter mt-2 text-xs text-textSecondary">
-            {canEnd
-              ? "Within 300 m of drop-off — you can end the trip."
-              : `~${Math.round(distDrop)} m to drop-off.`}
+            {DEV_END_TRIP_WITHOUT_DROP_OFF && !nearDropoff && trip?.status === "in_progress"
+              ? "[Dev] End Trip works without driving to drop-off. Set EXPO_PUBLIC_DEV_END_TRIP_ANYWHERE=false to require 300 m."
+              : nearDropoff
+                ? "Within 300 m of drop-off — you can end the trip."
+                : `~${Math.round(distDrop)} m to drop-off.`}
           </Text>
           <View className="mt-4">
             <Button

@@ -43,6 +43,22 @@ export default function RiderLayout() {
           animation: "slide_from_bottom",
         }}
       />
+      <Stack.Screen
+        name="trip-live"
+        options={{
+          headerShown: false,
+          gestureEnabled: false,
+          animation: "fade",
+        }}
+      />
+      <Stack.Screen
+        name="trip-complete"
+        options={{
+          headerShown: false,
+          gestureEnabled: false,
+          animation: "fade",
+        }}
+      />
     </Stack>
   );
 }

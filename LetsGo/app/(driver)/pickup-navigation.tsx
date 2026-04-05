@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import type { Href } from "expo-router";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import * as Linking from "expo-linking";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -43,6 +43,13 @@ export default function PickupNavigationScreen() {
   const [etaMin, setEtaMin] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const mapRef = useRef<MapView>(null);
+  const [headerCanGoBack, setHeaderCanGoBack] = useState(() => router.canGoBack());
+
+  useFocusEffect(
+    useCallback(() => {
+      setHeaderCanGoBack(router.canGoBack());
+    }, [router])
+  );
 
   const load = useCallback(async () => {
     if (!tripId) return;
@@ -180,9 +187,18 @@ export default function PickupNavigationScreen() {
         className="absolute left-4 right-4 flex-row items-center justify-between rounded-xl border border-border bg-background/95 px-4 py-3"
         style={{ top: insets.top + 8 }}
       >
-        <Pressable onPress={() => router.back()} hitSlop={12}>
-          <Ionicons name="chevron-back" size={24} color="#E8ECF2" />
-        </Pressable>
+        {headerCanGoBack ? (
+          <Pressable
+            onPress={() => {
+              if (router.canGoBack()) router.back();
+            }}
+            hitSlop={12}
+          >
+            <Ionicons name="chevron-back" size={24} color="#E8ECF2" />
+          </Pressable>
+        ) : (
+          <View style={{ width: 24 }} />
+        )}
         <Text className="font-sora flex-1 text-center text-base font-semibold text-text">
           Heading to pickup{etaMin != null ? ` — ~${etaMin} min` : ""}
         </Text>
