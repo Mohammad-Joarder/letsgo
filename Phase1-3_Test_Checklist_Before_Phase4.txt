@@ -1,0 +1,192 @@
+================================================================================
+LETS GO — FEATURES TO TEST (PHASES 1–3) BEFORE STARTING PHASE 4
+================================================================================
+Source: LetsGo_Master_Prompt.md phase definitions. Phase 4 adds real-time rider
+trip tracking, status machine, smooth driver marker, and related flows — confirm
+Phases 1–3 below are stable first.
+
+--------------------------------------------------------------------------------
+PHASE 1 — FOUNDATION (DATABASE, AUTH, ROLE SHELL)
+--------------------------------------------------------------------------------
+
+Database & backend
+  [ ] Supabase migration applies cleanly (schema, enums, tables).
+  [ ] PostGIS enabled; location columns usable for queries.
+  [ ] RLS policies: users see/update own data; admin rules where specified.
+  [ ] Core tables exist and relate correctly: profiles, riders, drivers, vehicles,
+      driver_documents, trips, trip_locations, fare_config, surge_zones,
+      promotions, rider_promotions, ratings, support_tickets, notifications,
+      driver_earnings_summary.
+  [ ] Edge function stub entries exist where Phase 1 specified (files/deploy),
+      even if not all are fully implemented until later phases.
+
+Mobile app shell & navigation
+  [ ] Expo Router structure loads; root layout auth gate works.
+  [ ] +not-found or missing routes handled gracefully.
+
+Authentication
+  [ ] Cold start: no session → auth/welcome flow.
+  [ ] Session restore: valid session → correct home by role.
+  [ ] Sign in (email/password) succeeds and fails with clear errors.
+  [ ] Sign up: name, email, phone, password → OTP verification.
+  [ ] Forgot password flow works (Supabase reset).
+  [ ] OTP / verify screens complete and sync with Supabase Auth.
+  [ ] After signup: role selection (Rider vs Driver).
+  [ ] Profile + rider OR driver row created in DB as appropriate.
+  [ ] Driver signup → “application under review” / pending path (not full app).
+
+Role-based routing
+  [ ] role = rider → rider experience (tabs/home).
+  [ ] role = driver → driver experience (tabs/home).
+  [ ] role = admin → message to use web admin (no mobile admin app).
+
+UI foundation
+  [ ] Shared UI: Button (variants), Input, Card, Badge, Avatar, LoadingSpinner,
+      BottomSheet behave and match design tokens.
+  [ ] SafeAreaWrapper / KeyboardAwareView where used.
+  [ ] Fonts/theme (e.g. Sora/Inter) load without layout breakage.
+
+Auth context & hooks
+  [ ] AuthContext state matches Supabase session and profile.
+  [ ] useAuth / useProfile return expected data after login and refresh.
+
+Rider shell (empty or minimal per Phase 1)
+  [ ] Rider home / my-rides / account tabs open (even if placeholder).
+
+Driver shell
+  [ ] Driver home / earnings / account tabs open (even if placeholder).
+
+--------------------------------------------------------------------------------
+PHASE 2 — RIDER CORE (BOOKING, MAP, FARE, CONFIRM)
+--------------------------------------------------------------------------------
+
+Edge functions
+  [ ] get-fare-estimate: Distance Matrix + fare_config + surge polygon check;
+      returns per ride type breakdown, distance, duration, surge flags.
+  [ ] search-nearby-drivers: approved + online drivers within radius;
+      PostGIS distance; empty result handled with message.
+
+Rider home — map & states (through confirming; “waiting for driver” is Phase 4)
+  [ ] STATE 1 IDLE: map, collapsed sheet, user location marker.
+  [ ] Nearby drivers shown on map (and poll ~10s if specified).
+  [ ] STATE 2 DESTINATION: pickup + dropoff via Places Autocomplete / search.
+  [ ] STATE 3 RIDE OPTIONS: route polyline, ride type cards, surge badge if active.
+  [ ] Promo code input validates against promotions rules.
+  [ ] Ride notes and “schedule for later” UI (if implemented) behave.
+  [ ] Fare breakdown / accordion readable and matches API.
+  [ ] STATE 4 CONFIRMING: loading/radar while booking; errors surfaced.
+  [ ] Book CTA calls trip creation path and navigates appropriately.
+  [ ] Location permission denied → sensible UX (not a crash).
+
+Components (rider)
+  [ ] DestinationSearch (recent searches if implemented).
+  [ ] RideTypeCard selection and styling.
+  [ ] RideOptionsSheet expand/collapse and interactions.
+  [ ] RoutePolyline draws correctly when pickup/dropoff set.
+  [ ] DriverMarker / car icons render and update.
+  [ ] PromoCodeInput success/failure states.
+  [ ] SchedulePicker (if present) validates future time.
+
+My rides (rider)
+  [ ] Tabs: Upcoming | Past (or equivalent).
+  [ ] List shows route summary, fare, status, rating where applicable.
+  [ ] Tap opens detail/modal without errors.
+
+Account (rider)
+  [ ] Profile: photo, name, rating display.
+  [ ] Payment methods section / Add card entry (UI may deepen in Phase 5).
+  [ ] Promotions / wallet section visible if implemented.
+  [ ] Settings links (notifications, safety, help) navigate or stub clearly.
+  [ ] Sign out clears session and returns to auth.
+
+Data & errors
+  [ ] Loading states on rider screens.
+  [ ] Network/API failure messages are user-visible.
+  [ ] Dark map style applied if configured.
+
+--------------------------------------------------------------------------------
+PHASE 3 — DRIVER CORE (ONLINE/OFFER, NAVIGATION, TRIP, EARNINGS)
+--------------------------------------------------------------------------------
+
+Edge functions
+  [ ] create-trip: insert searching trip, 4-digit pickup_pin, nearby driver list,
+      Realtime offer to driver_trip_offers:[driver_id], 15s timeout → next driver.
+  [ ] assign-driver: accept sets driver_accepted, driver_id, vehicle_id,
+      driver on_trip; reject skips and re-offers; rider notified on trip_updates.
+  [ ] update-driver-location: updates PostGIS point + timestamp; on trip inserts
+      trip_locations; broadcasts driver_location:[driver_id].
+
+Driver home
+  [ ] Online/offline toggle updates drivers.is_online and current_status.
+  [ ] Online: green/pulsing “you are online”; offline: grey messaging.
+  [ ] Map shows driver location; permission flow when going online.
+  [ ] Location pushes ~every 5s when online via update-driver-location.
+  [ ] Going offline stops tracking; blocked or warned if active trip (per spec).
+  [ ] Stats bar: today’s trips, earnings, rating (data or empty state).
+
+Trip request modal
+  [ ] Overlay shows rider info, ride type, pickup/dropoff, distance, est. earnings.
+  [ ] Map snippet / pickup context visible.
+  [ ] 15s countdown; accept → assign-driver(accept) → pickup navigation.
+  [ ] Decline or timeout → assign-driver(reject) → modal dismisses, next driver logic.
+
+Pickup navigation
+  [ ] Route to pickup with Directions polyline.
+  [ ] Top bar ETA text updates reasonably.
+  [ ] Bottom: rider name, tel: call, message entry point (if chat exists).
+  [ ] “I’ve Arrived” only enabled within ~200m of pickup.
+  [ ] I’ve Arrived sets status driver_arrived and wait timer starts if applicable.
+
+Trip in progress (driver)
+  [ ] Map/route to dropoff.
+  [ ] PIN UI: cannot start trip until PIN matches trips.pickup_pin.
+  [ ] Wrong PIN shows clear error.
+  [ ] After PIN OK: navigation to dropoff active.
+  [ ] Bottom: dropoff, timer/ETA, End Trip within ~300m of dropoff only.
+  [ ] End Trip sets completed, driver back online, navigates to summary.
+
+Trip summary (driver)
+  [ ] Earnings breakdown (base, distance, time, tip, platform fee → net).
+  [ ] Map replay or static route.
+  [ ] Rate rider: stars, tags, comment; submit persists.
+  [ ] Back to Home works.
+
+Earnings
+  [ ] Weekly chart / summary cards (this week, total, pending).
+  [ ] Trip list with per-trip earnings.
+  [ ] Request Payout invokes create-payout (or shows not-ready state).
+  [ ] Payout history section.
+
+Account (driver)
+  [ ] Profile, rating, trips, approval badge.
+  [ ] Vehicle card.
+  [ ] Documents status per type.
+  [ ] Bank details masked.
+  [ ] Ratings & reviews tab.
+  [ ] Settings: notifications, navigation app preference.
+  [ ] Sign out.
+
+Cross-app integration (Phases 2 + 3)
+  [ ] Rider books → driver online receives offer within expected time.
+  [ ] Accept path: trip statuses and DB fields align through driver summary.
+  [ ] Reject/timeout chains to another driver when multiple available.
+  [ ] Realtime channels used in P3 (offers, trip_updates, driver_location) do not
+      throw; reconnect after background app if applicable.
+
+Edge cases
+  [ ] No location permission (rider and driver).
+  [ ] No drivers in radius.
+  [ ] Network errors on critical calls (book, accept, location update).
+  [ ] Trip offer when driver toggles offline mid-offer (if specified).
+
+--------------------------------------------------------------------------------
+OPTIONAL SMOKE (IF PHASE 4 SCREENS ALREADY EXIST IN THE REPO)
+--------------------------------------------------------------------------------
+These belong to Phase 4 by spec; run quick smoke only so they do not block P3 sign-off:
+  [ ] Rider searching / driver found / in-trip rider UI does not crash after P3 flows.
+  [ ] Do not treat Phase 4 polish (smooth marker, full cancellation rules, etc.)
+      as gate for starting Phase 4 implementation — only that P1–P3 above pass.
+
+================================================================================
+END OF CHECKLIST
+================================================================================
