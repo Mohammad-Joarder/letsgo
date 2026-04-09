@@ -17,7 +17,8 @@ import { RoutePolyline } from "@/components/rider/RoutePolyline";
 import { Button } from "@/components/ui/Button";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
 import { haversineMeters } from "@/lib/geo";
-import { getCurrentPositionReliable, tryGetCurrentPositionReliable } from "@/lib/location";
+import { startDriverLocationService } from "@/lib/location/driverLocationService";
+import { getCurrentPositionReliable } from "@/lib/location";
 import { mapDarkStyle } from "@/lib/mapDarkStyle";
 import { supabase } from "@/lib/supabase";
 
@@ -105,19 +106,21 @@ export default function PickupNavigationScreen() {
   }, [trip]);
 
   useEffect(() => {
-    if (!trip) return;
-    const id = setInterval(() => {
-      void (async () => {
-        const pos = await tryGetCurrentPositionReliable({
-          balancedAttempts: 1,
-          lowAttempts: 1,
-          retryDelayMs: 0,
-        });
-        if (pos) setMyPos({ lat: pos.lat, lng: pos.lng });
-      })();
-    }, 8000);
-    return () => clearInterval(id);
-  }, [trip]);
+    if (!trip) return undefined;
+    const { stop } = startDriverLocationService(
+      {
+        onLocation: (lat, lng) => setMyPos({ lat, lng }),
+      },
+      {
+        serverPushIntervalMs: 2000,
+        timeIntervalMs: 2000,
+        distanceIntervalM: 5,
+        pushToServer: true,
+        exponentialBackoffOnPushFailure: true,
+      }
+    );
+    return () => stop();
+  }, [trip?.id]);
 
   const distToPickup =
     trip && myPos

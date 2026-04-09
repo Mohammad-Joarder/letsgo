@@ -22,12 +22,26 @@ export async function completeTrip(body: {
   return invoke("complete-trip", body);
 }
 
-export async function createPayout(): Promise<{
+export async function createPayout(body?: {
+  amount_cents?: number;
+}): Promise<{
   ok: boolean;
-  rows_queued?: number;
-  total_net?: number;
+  payout_id?: string;
+  transfer_id?: string;
+  estimated_arrival?: number | null;
   message?: string;
   error?: string;
 }> {
-  return invoke("create-payout", {});
+  return invoke("create-payout", (body ?? {}) as Record<string, unknown>);
+}
+
+export async function createConnectAccount(body?: {
+  driver_id?: string;
+}): Promise<{
+  ok: boolean;
+  account_id?: string;
+  onboarding_url?: string;
+  error?: string;
+}> {
+  return invoke("create-connect-account", (body ?? {}) as Record<string, unknown>);
 }

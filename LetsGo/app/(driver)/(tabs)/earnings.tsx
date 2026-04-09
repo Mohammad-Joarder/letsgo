@@ -79,7 +79,10 @@ export default function DriverEarningsScreen() {
     try {
       const res = await createPayout();
       if (!res.ok) throw new Error(res.error ?? "Failed");
-      Alert.alert("Payout queued", res.message ?? "OK");
+      const lines = [res.message ?? "Payout submitted."];
+      if (res.transfer_id) lines.push(`Transfer: ${res.transfer_id}`);
+      if (res.payout_id) lines.push(`Payout: ${res.payout_id}`);
+      Alert.alert("Payout", lines.join("\n"));
       void load();
     } catch (e) {
       Alert.alert("Payout", e instanceof Error ? e.message : "Try again.");

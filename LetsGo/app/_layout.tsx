@@ -10,10 +10,13 @@ import { useFonts } from "expo-font";
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import * as SplashScreen from "expo-splash-screen";
 import { Slot } from "expo-router";
+import type { ReactElement, ReactNode } from "react";
 import { useEffect } from "react";
 import { Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { StripeProvider } from "@stripe/stripe-react-native";
 import { AuthProvider, useAuthContext } from "@/context/AuthContext";
+import { getStripePublishableKey } from "@/lib/stripeConfig";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -39,7 +42,20 @@ function RootContent() {
     );
   }
 
-  return <Slot />;
+  return (
+    <StripeAppShell>
+      <Slot />
+    </StripeAppShell>
+  );
+}
+
+function StripeAppShell({ children }: { children: ReactNode }) {
+  const pk = getStripePublishableKey() ?? "";
+  return (
+    <StripeProvider publishableKey={pk} merchantIdentifier="merchant.com.letsgo.app" urlScheme="letsgo">
+      {children as ReactElement}
+    </StripeProvider>
+  );
 }
 
 export default function RootLayout() {

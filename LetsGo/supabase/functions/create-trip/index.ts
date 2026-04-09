@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { runInBackground } from "../_shared/background.ts";
 import { realtimeBroadcast } from "../_shared/realtime_broadcast.ts";
+import { audToCents, getStripe } from "../_shared/stripe.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -91,6 +92,8 @@ Deno.serve(async (req) => {
     const notes = b.notes != null ? String(b.notes) : null;
     const scheduledFor = b.scheduled_for != null ? String(b.scheduled_for) : null;
     const paymentMethod = (b.payment_method as string) || "card";
+    const stripePaymentIntentId =
+      b.stripe_payment_intent_id != null ? String(b.stripe_payment_intent_id).trim() : "";
 
     if (!pickupAddress || !dropoffAddress) {
       return new Response(JSON.stringify({ ok: false, error: "Addresses required" }), {
@@ -116,6 +119,71 @@ Deno.serve(async (req) => {
     const riderId = user.id;
     const pickupPin = randomPin();
 
+    const skipStripe = Deno.env.get("STRIPE_SKIP_VALIDATE") === "true";
+
+    if (paymentMethod === "card" && !stripePaymentIntentId && !skipStripe) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: "stripe_payment_intent_id required — authorize payment before booking.",
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    let paymentStatus: "pending" | "authorised" = "pending";
+    let verifiedPiId: string | null = null;
+
+    if (paymentMethod === "card" && skipStripe && stripePaymentIntentId) {
+      verifiedPiId = stripePaymentIntentId;
+      paymentStatus = "authorised";
+    }
+
+    if (paymentMethod === "card" && stripePaymentIntentId && !skipStripe) {
+      const { data: profStripe, error: psErr } = await admin
+        .from("profiles")
+        .select("stripe_customer_id")
+        .eq("id", riderId)
+        .single();
+      if (psErr || !profStripe?.stripe_customer_id) {
+        return new Response(JSON.stringify({ ok: false, error: "Stripe customer missing" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const stripe = getStripe();
+      const pi = await stripe.paymentIntents.retrieve(stripePaymentIntentId);
+      if (typeof pi.customer === "string" && pi.customer !== profStripe.stripe_customer_id) {
+        return new Response(JSON.stringify({ ok: false, error: "PaymentIntent customer mismatch" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const metaRider = pi.metadata?.rider_id;
+      if (metaRider && metaRider !== riderId) {
+        return new Response(JSON.stringify({ ok: false, error: "PaymentIntent rider mismatch" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const expectedCents = audToCents(estFare != null ? Number(estFare) : 0);
+      const piAmount = pi.amount;
+      if (Math.abs(piAmount - expectedCents) > 2) {
+        return new Response(JSON.stringify({ ok: false, error: "PaymentIntent amount does not match fare" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (pi.status !== "requires_capture" && pi.status !== "succeeded") {
+        return new Response(
+          JSON.stringify({ ok: false, error: `Payment not authorized (status: ${pi.status})` }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      paymentStatus = "authorised";
+      verifiedPiId = pi.id;
+    }
+
     const { data: trip, error: tErr } = await admin
       .from("trips")
       .insert({
@@ -140,7 +208,8 @@ Deno.serve(async (req) => {
         notes,
         scheduled_for: scheduledFor,
         payment_method: paymentMethod,
-        payment_status: "pending",
+        payment_status: paymentStatus,
+        stripe_payment_intent_id: verifiedPiId,
       })
       .select("id, status, pickup_pin")
       .single();

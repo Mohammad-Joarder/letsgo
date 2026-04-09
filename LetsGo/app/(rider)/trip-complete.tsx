@@ -1,6 +1,6 @@
 import type { Href } from "expo-router";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -12,37 +12,57 @@ import {
   TextInput,
   View,
 } from "react-native";
+import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import { CompletedTripFareBreakdown } from "@/components/rider/CompletedTripFareBreakdown";
 import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
 import { StarRatingPicker } from "@/components/shared/StarRatingPicker";
+import { useStripe } from "@stripe/stripe-react-native";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/hooks/useAuth";
+import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { chargeRiderTip } from "@/lib/riderEdge";
+import { isStripeConfigured } from "@/lib/stripeConfig";
 import { supabase } from "@/lib/supabase";
 
-const TAGS = ["Smooth ride", "Safe driving", "Friendly", "On time", "Clean car"];
+const TAGS = ["Clean car", "Great chat", "On time", "Safe driver", "Quiet"];
 
 export default function RiderTripCompleteScreen() {
   const router = useRouter();
   const { tripId } = useLocalSearchParams<{ tripId: string }>();
   const { user } = useAuth();
+  const { confirmPayment } = useStripe();
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [pickupAddress, setPickupAddress] = useState("");
   const [dropoffAddress, setDropoffAddress] = useState("");
+  const [pickupLat, setPickupLat] = useState<number | null>(null);
+  const [pickupLng, setPickupLng] = useState<number | null>(null);
+  const [dropLat, setDropLat] = useState<number | null>(null);
+  const [dropLng, setDropLng] = useState<number | null>(null);
   const [fare, setFare] = useState(0);
+  const [baseFare, setBaseFare] = useState<number | null>(null);
+  const [distanceFare, setDistanceFare] = useState<number | null>(null);
+  const [timeFare, setTimeFare] = useState<number | null>(null);
+  const [platformFee, setPlatformFee] = useState<number | null>(null);
+  const [surgeMult, setSurgeMult] = useState<number | null>(null);
   const [driverId, setDriverId] = useState<string | null>(null);
   const [driverName, setDriverName] = useState("Your driver");
   const [stars, setStars] = useState(0);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [comment, setComment] = useState("");
+  const [tipDollars, setTipDollars] = useState(0);
+  const [customTip, setCustomTip] = useState("");
+  const [customMode, setCustomMode] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<"card" | "cash" | "wallet" | null>(null);
 
   const load = useCallback(async () => {
     if (!tripId || !user?.id) return;
     const { data, error: qErr } = await supabase
       .from("trips")
       .select(
-        "rider_id, driver_id, status, pickup_address, dropoff_address, estimated_fare, final_fare, trip_completed_at"
+        "rider_id, driver_id, status, pickup_address, dropoff_address, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, estimated_fare, final_fare, base_fare, distance_fare, time_fare, platform_fee, surge_multiplier, rider_tip, trip_completed_at, payment_method"
       )
       .eq("id", tripId)
       .maybeSingle();
@@ -63,9 +83,19 @@ export default function RiderTripCompleteScreen() {
     }
     setPickupAddress(String(data.pickup_address ?? ""));
     setDropoffAddress(String(data.dropoff_address ?? ""));
+    setPickupLat(data.pickup_lat != null ? Number(data.pickup_lat) : null);
+    setPickupLng(data.pickup_lng != null ? Number(data.pickup_lng) : null);
+    setDropLat(data.dropoff_lat != null ? Number(data.dropoff_lat) : null);
+    setDropLng(data.dropoff_lng != null ? Number(data.dropoff_lng) : null);
     const paid =
       data.final_fare != null ? Number(data.final_fare) : Number(data.estimated_fare ?? 0);
     setFare(paid);
+    setBaseFare(data.base_fare != null ? Number(data.base_fare) : null);
+    setDistanceFare(data.distance_fare != null ? Number(data.distance_fare) : null);
+    setTimeFare(data.time_fare != null ? Number(data.time_fare) : null);
+    setPlatformFee(data.platform_fee != null ? Number(data.platform_fee) : null);
+    setSurgeMult(data.surge_multiplier != null ? Number(data.surge_multiplier) : null);
+    if (data.rider_tip != null) setTipDollars(Number(data.rider_tip));
     const did = data.driver_id as string | null;
     setDriverId(did);
     if (did) {
@@ -75,6 +105,12 @@ export default function RiderTripCompleteScreen() {
         .eq("id", did)
         .maybeSingle();
       setDriverName(prof?.full_name ?? "Your driver");
+    }
+    const pm = data.payment_method as string | null;
+    if (pm === "card" || pm === "cash" || pm === "wallet") {
+      setPaymentMethod(pm);
+    } else {
+      setPaymentMethod("card");
     }
     setError(null);
     setLoading(false);
@@ -88,12 +124,28 @@ export default function RiderTripCompleteScreen() {
     useCallback(() => {
       if (Platform.OS !== "android") return undefined;
       const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-        router.replace("/(rider)/(tabs)/home" as Href);
+        Alert.alert("Rate your trip", "Give your driver a star rating before leaving this screen.");
         return true;
       });
       return () => sub.remove();
-    }, [router])
+    }, [])
   );
+
+  const effectiveTip = useMemo(() => {
+    if (customMode) {
+      const n = parseFloat(customTip.replace(/[^0-9.]/g, ""));
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    }
+    return tipDollars;
+  }, [customMode, customTip, tipDollars]);
+
+  const chargedTotal = fare + effectiveTip;
+
+  function setPresetTip(n: number) {
+    setCustomMode(false);
+    setCustomTip("");
+    setTipDollars(n);
+  }
 
   async function submitRating() {
     if (!tripId || !user?.id || !driverId) {
@@ -101,11 +153,49 @@ export default function RiderTripCompleteScreen() {
       return;
     }
     if (stars < 1) {
-      Alert.alert("Rate your trip", "Tap the stars to rate your driver (1–5).");
+      Alert.alert("Rate your trip", "Tap the stars to rate your driver (1–5) before continuing.");
       return;
     }
     setSubmitting(true);
     try {
+      const tipCents = Math.round(effectiveTip * 100);
+
+      if (
+        effectiveTip > 0 &&
+        paymentMethod === "card" &&
+        isStripeConfigured() &&
+        Platform.OS === "web"
+      ) {
+        Alert.alert(
+          "Tip",
+          "Paying a tip with your saved card is only supported in the iOS or Android app."
+        );
+        setSubmitting(false);
+        return;
+      }
+
+      if (
+        effectiveTip > 0 &&
+        paymentMethod === "card" &&
+        isStripeConfigured() &&
+        Platform.OS !== "web"
+      ) {
+        if (tipCents < 50) {
+          Alert.alert("Tip", "Tips charged to your card must be at least $0.50 AUD.");
+          setSubmitting(false);
+          return;
+        }
+        const tipRes = await chargeRiderTip({ trip_id: tripId, amount_cents: tipCents });
+        if (tipRes.requires_action && tipRes.client_secret) {
+          const { error: confirmErr } = await confirmPayment(tipRes.client_secret, {
+            paymentMethodType: "Card",
+          });
+          if (confirmErr) throw new Error(confirmErr.message);
+        } else if (!tipRes.ok) {
+          throw new Error(tipRes.error ?? "Could not charge tip");
+        }
+      }
+
       const { data: existing } = await supabase
         .from("ratings")
         .select("id")
@@ -116,6 +206,13 @@ export default function RiderTripCompleteScreen() {
         router.replace("/(rider)/(tabs)/home" as Href);
         return;
       }
+      const { error: tipErr } = await supabase
+        .from("trips")
+        .update({ rider_tip: effectiveTip })
+        .eq("id", tripId)
+        .eq("rider_id", user.id);
+      if (tipErr) throw tipErr;
+
       const { error: insErr } = await supabase.from("ratings").insert({
         trip_id: tripId,
         from_user_id: user.id,
@@ -133,15 +230,17 @@ export default function RiderTripCompleteScreen() {
       if (tripErr) throw tripErr;
       router.replace("/(rider)/(tabs)/home" as Href);
     } catch (e) {
-      Alert.alert("Could not save rating", e instanceof Error ? e.message : "Try again.");
+      Alert.alert("Could not save", e instanceof Error ? e.message : "Try again.");
     } finally {
       setSubmitting(false);
     }
   }
 
-  function skipToHome() {
+  function bookAgain() {
     router.replace("/(rider)/(tabs)/home" as Href);
   }
+
+  const mapReady = Platform.OS !== "web" && pickupLat != null && pickupLng != null && dropLat != null && dropLng != null;
 
   if (loading) {
     return (
@@ -159,7 +258,7 @@ export default function RiderTripCompleteScreen() {
         <View className="flex-1 items-center justify-center bg-background px-6">
           <Text className="font-inter text-center text-error">{error}</Text>
           <View className="mt-6 w-full max-w-sm">
-            <Button title="Back to home" onPress={skipToHome} />
+            <Button title="Back to home" onPress={bookAgain} />
           </View>
         </View>
       </SafeAreaWrapper>
@@ -176,19 +275,84 @@ export default function RiderTripCompleteScreen() {
         <Text className="font-sora-display text-2xl font-bold text-text">Trip complete</Text>
         <Text className="font-inter mt-1 text-sm text-textSecondary">Thanks for riding with Lets Go.</Text>
 
-        <View className="mt-6 rounded-2xl border border-border bg-surface2/80 p-4">
-          <Text className="font-inter text-xs font-semibold uppercase text-textSecondary">Paid</Text>
-          <Text className="font-sora mt-1 text-2xl font-bold text-text">${fare.toFixed(2)}</Text>
-          <Text className="font-inter mt-4 text-xs font-semibold uppercase text-textSecondary">Driver</Text>
-          <Text className="font-inter mt-1 text-base text-text">{driverName}</Text>
-          <Text className="font-inter mt-4 text-xs font-semibold uppercase text-textSecondary">Pickup</Text>
-          <Text className="font-inter mt-1 text-sm text-textSecondary">{pickupAddress}</Text>
-          <Text className="font-inter mt-4 text-xs font-semibold uppercase text-textSecondary">Drop-off</Text>
-          <Text className="font-inter mt-1 text-sm text-textSecondary">{dropoffAddress}</Text>
+        {mapReady ? (
+          <View className="mt-4 h-40 overflow-hidden rounded-2xl border border-border">
+            <MapView
+              style={{ flex: 1 }}
+              provider={PROVIDER_GOOGLE}
+              customMapStyle={mapDarkStyle}
+              scrollEnabled={false}
+              zoomEnabled={false}
+              pitchEnabled={false}
+              rotateEnabled={false}
+              initialRegion={{
+                latitude: (pickupLat! + dropLat!) / 2,
+                longitude: (pickupLng! + dropLng!) / 2,
+                latitudeDelta: Math.abs(pickupLat! - dropLat!) * 1.8 + 0.02,
+                longitudeDelta: Math.abs(pickupLng! - dropLng!) * 1.8 + 0.02,
+              }}
+            >
+              <Marker coordinate={{ latitude: pickupLat!, longitude: pickupLng! }} pinColor="#3B82F6" />
+              <Marker coordinate={{ latitude: dropLat!, longitude: dropLng! }} pinColor="#F97316" />
+            </MapView>
+          </View>
+        ) : null}
+
+        <View className="mt-4">
+          <CompletedTripFareBreakdown
+            baseFare={baseFare}
+            distanceFare={distanceFare}
+            timeFare={timeFare}
+            platformFee={platformFee}
+            surgeMultiplier={surgeMult}
+            chargedTotal={chargedTotal}
+          />
         </View>
 
+        <Text className="font-inter mt-4 text-xs font-semibold uppercase text-textSecondary">Driver</Text>
+        <Text className="font-inter mt-1 text-base text-text">{driverName}</Text>
+        <Text className="font-inter mt-4 text-xs font-semibold uppercase text-textSecondary">Pickup</Text>
+        <Text className="font-inter mt-1 text-sm text-textSecondary">{pickupAddress}</Text>
+        <Text className="font-inter mt-4 text-xs font-semibold uppercase text-textSecondary">Drop-off</Text>
+        <Text className="font-inter mt-1 text-sm text-textSecondary">{dropoffAddress}</Text>
+
+        <Text className="font-inter mt-8 text-sm font-semibold text-text">Tip your driver</Text>
+        <View className="mt-3 flex-row flex-wrap gap-2">
+          {[1, 2, 5].map((n) => {
+            const on = !customMode && tipDollars === n;
+            return (
+              <Pressable
+                key={n}
+                onPress={() => setPresetTip(n)}
+                className={`rounded-full border px-4 py-2 ${on ? "border-primary bg-primary/15" : "border-border"}`}
+              >
+                <Text className="font-inter text-sm text-text">${n}</Text>
+              </Pressable>
+            );
+          })}
+          <Pressable
+            onPress={() => {
+              setCustomMode(true);
+              setTipDollars(0);
+            }}
+            className={`rounded-full border px-4 py-2 ${customMode ? "border-primary bg-primary/15" : "border-border"}`}
+          >
+            <Text className="font-inter text-sm text-text">Custom</Text>
+          </Pressable>
+        </View>
+        {customMode ? (
+          <TextInput
+            value={customTip}
+            onChangeText={setCustomTip}
+            keyboardType="decimal-pad"
+            placeholder="Amount (AUD)"
+            placeholderTextColor="#5C6678"
+            className="font-inter mt-3 rounded-xl border border-border bg-surface2 px-3 py-3 text-sm text-text"
+          />
+        ) : null}
+
         <Text className="font-inter mt-8 text-sm font-semibold text-text">How was your driver?</Text>
-        <Text className="font-inter mt-1 text-xs text-textSecondary">Tap 1–5 stars</Text>
+        <Text className="font-inter mt-1 text-xs text-textSecondary">Rating required</Text>
         <View className="mt-3">
           <StarRatingPicker value={stars} onChange={setStars} size={44} />
         </View>
@@ -220,8 +384,11 @@ export default function RiderTripCompleteScreen() {
         />
 
         <View className="mt-8 gap-3">
-          <Button title="Submit rating & done" loading={submitting} onPress={() => void submitRating()} />
-          <Button title="Skip for now" variant="ghost" onPress={skipToHome} />
+          <Button
+            title="Submit rating & Book again"
+            loading={submitting}
+            onPress={() => void submitRating()}
+          />
         </View>
       </ScrollView>
     </SafeAreaWrapper>

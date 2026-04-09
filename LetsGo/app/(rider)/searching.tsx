@@ -1,229 +1,295 @@
 import { Ionicons } from "@expo/vector-icons";
 import type { Href } from "expo-router";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Alert, Platform, Pressable, Text, View } from "react-native";
+import MapView, { Circle, Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from "react-native-reanimated";
 import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/hooks/useAuth";
-import { removeSupabaseChannelsForTopic } from "@/lib/realtimeChannelTeardown";
+import { useNearbyDrivers } from "@/hooks/useNearbyDrivers";
+import { useTripStatus } from "@/hooks/useTripStatus";
+import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { riderCancelTrip } from "@/lib/riderEdge";
 import { supabase } from "@/lib/supabase";
 
-function riderTripHeadline(status: string | null): string {
-  switch (status) {
-    case "searching":
-      return "Matching you with nearby drivers…";
-    case "driver_accepted":
-      return "A driver accepted — they’re on the way to you.";
-    case "driver_arrived":
-      return "Your driver has arrived at pickup.";
-    case "in_progress":
-      return "Trip in progress.";
-    case "no_driver_found":
-      return "No drivers available right now.";
-    case "cancelled":
-      return "This trip was cancelled.";
-    default:
-      return status ? `Status: ${status.replace(/_/g, " ")}` : "Updating…";
-  }
-}
+type TripLite = {
+  rider_id: string;
+  status: string;
+  pickup_pin: string | null;
+  pickup_lat: number;
+  pickup_lng: number;
+  pickup_address: string;
+  ride_type: "economy" | "comfort" | "premium" | "xl";
+  created_at: string;
+};
 
 export default function SearchingScreen() {
   const router = useRouter();
   const { tripId } = useLocalSearchParams<{ tripId: string }>();
   const { user } = useAuth();
-  const [status, setStatus] = useState<string | null>(null);
-  const [pin, setPin] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [cancelling, setCancelling] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const mapRef = useRef<MapView>(null);
 
-  const load = useCallback(async () => {
-    if (!tripId) {
-      setError("Missing trip.");
-      setLoading(false);
-      return;
-    }
-    if (!user?.id) {
-      return;
-    }
+  const [trip, setTrip] = useState<TripLite | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [bootLoading, setBootLoading] = useState(true);
+  const [cancelling, setCancelling] = useState(false);
+
+  const radar = useSharedValue(0.6);
+  useEffect(() => {
+    radar.value = withRepeat(
+      withSequence(withTiming(1.15, { duration: 1400 }), withTiming(0.6, { duration: 0 })),
+      -1,
+      false
+    );
+  }, [radar]);
+
+  const radarStyle = useAnimatedStyle(() => ({
+    opacity: 0.35,
+    transform: [{ scale: radar.value }],
+  }));
+
+  const loadTrip = useCallback(async () => {
+    if (!tripId || !user?.id) return;
     const { data, error: qErr } = await supabase
       .from("trips")
-      .select("status, pickup_pin, rider_id")
+      .select(
+        "rider_id, status, pickup_pin, pickup_lat, pickup_lng, pickup_address, ride_type, created_at"
+      )
       .eq("id", tripId)
       .maybeSingle();
     if (qErr) {
-      setError(qErr.message);
-      setLoading(false);
+      setLoadError(qErr.message);
+      setBootLoading(false);
       return;
     }
     if (!data || data.rider_id !== user.id) {
-      setError("Trip not found.");
-      setLoading(false);
+      setLoadError("Trip not found.");
+      setBootLoading(false);
       return;
     }
-    setError(null);
-    setStatus(data.status);
-    setPin(data.pickup_pin);
-    setLoading(false);
+    setTrip(data as TripLite);
+    setLoadError(null);
+    setBootLoading(false);
   }, [tripId, user?.id]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadTrip();
+  }, [loadTrip]);
+
+  const { status } = useTripStatus(tripId, { enabled: Boolean(tripId) });
+
+  const mergedStatus = status ?? trip?.status ?? null;
 
   useEffect(() => {
-    if (!tripId || loading || !status) return;
-    if (status === "in_progress") {
+    if (!tripId || !mergedStatus) return;
+    if (mergedStatus === "driver_accepted" || mergedStatus === "driver_arrived") {
+      router.replace(
+        `/(rider)/trip-awaiting-pickup?tripId=${encodeURIComponent(tripId)}` as Href
+      );
+      return;
+    }
+    if (mergedStatus === "in_progress") {
       router.replace(`/(rider)/trip-live?tripId=${encodeURIComponent(tripId)}` as Href);
       return;
     }
-    if (status === "completed") {
+    if (mergedStatus === "completed") {
       router.replace(`/(rider)/trip-complete?tripId=${encodeURIComponent(tripId)}` as Href);
+      return;
     }
-  }, [tripId, status, loading, router]);
+    if (mergedStatus === "cancelled" || mergedStatus === "no_driver_found") {
+      router.replace("/(rider)/(tabs)/home" as Href);
+    }
+  }, [tripId, mergedStatus, router]);
+
+  const { drivers } = useNearbyDrivers({
+    pickupLat: trip?.pickup_lat,
+    pickupLng: trip?.pickup_lng,
+    rideType: trip?.ride_type ?? "economy",
+    enabled: Boolean(trip && mergedStatus === "searching"),
+    intervalMs: 10_000,
+  });
+
+  const etaHint = useMemo(() => {
+    if (!drivers.length) return "We’re finding the closest driver…";
+    const best = Math.min(...drivers.map((d) => d.eta_min));
+    return `A driver may be ~${Math.max(1, Math.round(best))} min away`;
+  }, [drivers]);
+
+  const region = useMemo(() => {
+    if (!trip) {
+      return {
+        latitude: -33.8688,
+        longitude: 151.2093,
+        latitudeDelta: 0.08,
+        longitudeDelta: 0.08,
+      };
+    }
+    return {
+      latitude: Number(trip.pickup_lat),
+      longitude: Number(trip.pickup_lng),
+      latitudeDelta: 0.06,
+      longitudeDelta: 0.06,
+    };
+  }, [trip]);
 
   useEffect(() => {
-    if (!tripId) return;
-    const id = setInterval(() => void load(), 3000);
-    return () => clearInterval(id);
-  }, [tripId, load]);
-
-  useEffect(() => {
-    if (!tripId || !user?.id) return undefined;
-    const topic = `trip_updates:${tripId}`;
-    let cancelled = false;
-
-    const applyTripPatch = (next: { status?: string; pickup_pin?: string | null }) => {
-      if (next.status) setStatus(next.status);
-      if (next.pickup_pin != null) setPin(next.pickup_pin);
-    };
-
-    async function setup() {
-      await removeSupabaseChannelsForTopic(supabase, topic);
-      if (cancelled) return;
-
-      const ch = supabase
-        .channel(topic)
-        .on("broadcast", { event: "status" }, ({ payload }) => {
-          const p = payload as { status?: string; pickup_pin?: string };
-          applyTripPatch(p);
-        })
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "trips",
-            filter: `id=eq.${tripId}`,
-          },
-          (payload) => {
-            applyTripPatch(payload.new as { status?: string; pickup_pin?: string | null });
-          }
-        )
-        .subscribe();
-
-      if (cancelled) {
-        await supabase.removeChannel(ch);
-      }
+    if (trip && mapRef.current) {
+      mapRef.current.animateToRegion(region, 600);
     }
+  }, [trip, region]);
 
-    void setup();
-
-    return () => {
-      cancelled = true;
-      void removeSupabaseChannelsForTopic(supabase, topic);
-    };
-  }, [tripId, user?.id]);
-
-  async function cancelSearch() {
+  async function onCancel() {
     if (!tripId) return;
     setCancelling(true);
-    setError(null);
     try {
-      const { error: uErr } = await supabase
-        .from("trips")
-        .update({
-          status: "cancelled",
-          cancellation_reason: "rider_cancelled",
-          cancelled_at: new Date().toISOString(),
-          cancelled_by: user?.id ?? null,
-        })
-        .eq("id", tripId)
-        .eq("rider_id", user?.id ?? "");
-      if (uErr) throw uErr;
+      const res = await riderCancelTrip(tripId);
+      if (!res.ok) throw new Error(res.error ?? "Cancel failed");
+      if (res.fee_aud && res.fee_aud > 0) {
+        Alert.alert(
+          "Trip cancelled",
+          `A cancellation fee of $${res.fee_aud.toFixed(2)} applies (Stripe billing in a later phase).`
+        );
+      }
       router.replace("/(rider)/(tabs)/home" as Href);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not cancel.");
+      Alert.alert("Could not cancel", e instanceof Error ? e.message : "Try again.");
     } finally {
       setCancelling(false);
     }
   }
 
-  const canDismissModal = status === "searching" || status === "no_driver_found";
-  const canCancelSearch = status === "searching";
+  const mapReady = Platform.OS !== "web";
+
+  if (bootLoading) {
+    return (
+      <SafeAreaWrapper edges={["top", "left", "right", "bottom"]}>
+        <View className="flex-1 items-center justify-center bg-background">
+          <ActivityIndicator size="large" color="#00D4AA" />
+        </View>
+      </SafeAreaWrapper>
+    );
+  }
+
+  if (loadError || !trip) {
+    return (
+      <SafeAreaWrapper edges={["top", "left", "right", "bottom"]}>
+        <View className="flex-1 items-center justify-center bg-background px-6">
+          <Text className="font-inter text-center text-error">{loadError ?? "Missing trip."}</Text>
+          <View className="mt-6 w-full max-w-sm">
+            <Button title="Back to home" onPress={() => router.replace("/(rider)/(tabs)/home" as Href)} />
+          </View>
+        </View>
+      </SafeAreaWrapper>
+    );
+  }
+
+  if (mergedStatus !== "searching") {
+    return (
+      <SafeAreaWrapper edges={["top", "left", "right", "bottom"]}>
+        <View className="flex-1 items-center justify-center bg-background">
+          <ActivityIndicator size="large" color="#00D4AA" />
+          <Text className="font-inter mt-4 text-textSecondary">Updating trip…</Text>
+        </View>
+      </SafeAreaWrapper>
+    );
+  }
 
   return (
     <SafeAreaWrapper edges={["top", "left", "right", "bottom"]}>
-      <View className="flex-1 bg-background px-6">
-        <View className="mb-8 mt-4 flex-row items-center justify-between">
-          <Text className="font-sora-display text-2xl font-bold text-text">Finding a driver</Text>
-          {canDismissModal ? (
-            <Pressable
-              onPress={() => {
-                if (router.canGoBack()) router.back();
-                else router.replace("/(rider)/(tabs)/home" as Href);
-              }}
-              hitSlop={12}
+      <View className="flex-1 bg-background">
+        {mapReady ? (
+          <>
+            <MapView
+              ref={mapRef}
+              style={{ flex: 1 }}
+              provider={PROVIDER_GOOGLE}
+              customMapStyle={mapDarkStyle}
+              initialRegion={region}
+              showsUserLocation={false}
             >
-              <Ionicons name="close" size={28} color="#8A94A6" />
-            </Pressable>
-          ) : (
-            <View style={{ width: 28 }} />
-          )}
+              <Marker
+                coordinate={{ latitude: Number(trip.pickup_lat), longitude: Number(trip.pickup_lng) }}
+                title="Pickup"
+                pinColor="#00D4AA"
+              />
+              <Circle
+                center={{ latitude: Number(trip.pickup_lat), longitude: Number(trip.pickup_lng) }}
+                radius={280}
+                strokeColor="rgba(0, 212, 170, 0.35)"
+                fillColor="rgba(0, 212, 170, 0.06)"
+              />
+            </MapView>
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                radarStyle,
+                {
+                  position: "absolute",
+                  left: "35%",
+                  right: "35%",
+                  top: "32%",
+                  aspectRatio: 1,
+                  borderRadius: 9999,
+                  borderWidth: 2,
+                  borderColor: "rgba(0, 212, 170, 0.45)",
+                },
+              ]}
+            />
+          </>
+        ) : (
+          <View className="flex-1 items-center justify-center bg-surface">
+            <ActivityIndicator color="#00D4AA" />
+          </View>
+        )}
+
+        <View className="absolute left-4 right-4 top-14 flex-row items-center justify-between">
+          <Text className="font-sora-display text-xl font-bold text-white drop-shadow-md">
+            Finding your driver
+          </Text>
+          <Pressable
+            onPress={() => {
+              if (router.canGoBack()) router.back();
+              else router.replace("/(rider)/(tabs)/home" as Href);
+            }}
+            hitSlop={12}
+            className="rounded-full bg-black/40 p-2"
+          >
+            <Ionicons name="close" size={24} color="#E8ECF2" />
+          </Pressable>
         </View>
 
-        {loading ? (
-          <View className="flex-1 items-center justify-center">
-            <ActivityIndicator size="large" color="#00D4AA" />
-          </View>
-        ) : error ? (
-          <Text className="font-inter text-center text-error">{error}</Text>
-        ) : (
-          <>
-            <View className="items-center rounded-3xl border border-primary/30 bg-primary/5 px-6 py-10">
-              <View className="mb-6 h-24 w-24 items-center justify-center rounded-full border-2 border-primary/60">
-                <View className="h-16 w-16 rounded-full bg-primary/20" />
-              </View>
-              <Text className="font-sora text-center text-lg font-semibold text-text">
-                {riderTripHeadline(status)}
-              </Text>
-              {pin ? (
-                <Text className="font-inter mt-4 text-center text-sm text-textSecondary">
-                  Pickup PIN for your driver:{" "}
-                  <Text className="font-sora text-base font-bold text-primary">{pin}</Text>
-                </Text>
-              ) : null}
+        <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background/95 px-6 pb-10 pt-5">
+          <View className="mb-4 items-center">
+            <View className="mb-3 h-16 w-16 items-center justify-center rounded-full border-2 border-primary/70 bg-primary/10">
+              <Animated.View
+                style={radarStyle}
+                className="absolute h-14 w-14 rounded-full border border-primary/40"
+              />
+              <Ionicons name="navigate" size={28} color="#00D4AA" />
             </View>
-
-            {canCancelSearch ? (
-              <View className="mt-auto pb-8">
-                <Button
-                  title="Cancel search"
-                  variant="secondary"
-                  loading={cancelling}
-                  onPress={() => void cancelSearch()}
-                />
-              </View>
-            ) : (
-              <View className="mt-auto pb-8">
-                <Text className="font-inter text-center text-xs text-textSecondary">
-                  A driver is on the way — cancel from support if you need help.
-                </Text>
-              </View>
-            )}
-          </>
-        )}
+            <Text className="font-sora text-center text-lg font-semibold text-text">
+              Finding your driver…
+            </Text>
+            <Text className="font-inter mt-2 text-center text-sm text-textSecondary">{etaHint}</Text>
+            <Text className="font-inter mt-1 text-center text-xs text-textSecondary">
+              Free cancellation until a driver is assigned
+            </Text>
+          </View>
+          <Button
+            title="Cancel search"
+            variant="secondary"
+            loading={cancelling}
+            onPress={() => void onCancel()}
+          />
+        </View>
       </View>
     </SafeAreaWrapper>
   );

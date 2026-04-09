@@ -6,8 +6,10 @@ import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import type { Href } from "expo-router";
 import { signOut } from "@/lib/auth";
 import { useProfile } from "@/hooks/useProfile";
+import { isStripeConfigured } from "@/lib/stripeConfig";
 import { supabase } from "@/lib/supabase";
 
 type RiderRow = {
@@ -99,6 +101,9 @@ export default function RiderAccountScreen() {
             <Text className="font-inter text-sm text-textSecondary">{profile?.email}</Text>
             <Text className="font-inter mt-2 text-xs text-textSecondary">
               Rating {stars} ★ · {loading ? "…" : `$${Number(rider?.wallet_balance ?? 0).toFixed(2)} wallet`}
+              {isStripeConfigured()
+                ? " · Card trips are charged through Stripe; wallet is separate."
+                : ""}
             </Text>
           </View>
         </Card>
@@ -110,11 +115,13 @@ export default function RiderAccountScreen() {
           <Row
             icon="card-outline"
             title="Payment methods"
-            subtitle="Cards and wallets (Stripe in a later phase)"
+            subtitle={
+              isStripeConfigured()
+                ? "Saved cards via Stripe"
+                : "Add EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY to manage cards"
+            }
+            onPress={() => router.push("/(rider)/payment-methods" as Href)}
           />
-          <Pressable className="px-4 py-3 active:bg-surface2/40">
-            <Text className="font-inter text-center text-sm font-semibold text-primary">Add card</Text>
-          </Pressable>
         </Card>
 
         <Text className="font-inter mb-2 mt-8 text-xs font-bold uppercase tracking-wide text-textSecondary">

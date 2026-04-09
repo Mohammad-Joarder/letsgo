@@ -22,6 +22,8 @@ export type DriverLocationServiceOptions = {
   distanceIntervalM?: number;
   accuracy?: Location.Accuracy;
   pushToServer?: boolean;
+  /** On failed pushes, increase delay up to ~32s (Phase 4). */
+  exponentialBackoffOnPushFailure?: boolean;
 };
 
 /**
@@ -38,21 +40,33 @@ export function startDriverLocationService(
     distanceIntervalM = 10,
     accuracy = Location.Accuracy.Balanced,
     pushToServer = true,
+    exponentialBackoffOnPushFailure = false,
   } = options ?? {};
 
   let subscription: Location.LocationSubscription | null = null;
   let cancelled = false;
   let lastServerPush = 0;
+  let pushFailures = 0;
+  let nextPushAllowedAt = 0;
 
   const pushIfDue = async (lat: number, lng: number) => {
     if (!pushToServer) return;
     const now = Date.now();
+    if (now < nextPushAllowedAt) return;
     if (now - lastServerPush < serverPushIntervalMs) return;
     lastServerPush = now;
     try {
-      await updateDriverLocation(lat, lng);
+      const res = await updateDriverLocation(lat, lng);
+      if (res?.ok === false) throw new Error("update-driver-location rejected");
+      pushFailures = 0;
+      nextPushAllowedAt = 0;
     } catch {
-      /* non-fatal; next interval retries */
+      if (exponentialBackoffOnPushFailure) {
+        pushFailures = Math.min(pushFailures + 1, 6);
+        const delay = Math.min(32_000, 2000 * 2 ** (pushFailures - 1));
+        nextPushAllowedAt = Date.now() + delay;
+        lastServerPush = Date.now() - serverPushIntervalMs;
+      }
     }
   };
 

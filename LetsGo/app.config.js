@@ -45,12 +45,20 @@ module.exports = {
   plugins: [
     "expo-router",
     "expo-font",
+    "expo-web-browser",
     "@react-native-community/datetimepicker",
     [
       "expo-location",
       {
         locationWhenInUsePermission:
           "Lets Go uses your location to set pickup points and show nearby drivers.",
+      },
+    ],
+    [
+      "@stripe/stripe-react-native",
+      {
+        merchantIdentifier: "merchant.com.letsgo.app",
+        enableGooglePay: false,
       },
     ],
   ],
@@ -68,5 +76,7 @@ module.exports = {
       process.env.EXPO_PUBLIC_AUTH_SIGNUP_OMIT_EMAIL_REDIRECT,
     EXPO_PUBLIC_GOOGLE_MAPS_API_KEY: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY,
     EXPO_PUBLIC_DEV_END_TRIP_ANYWHERE: process.env.EXPO_PUBLIC_DEV_END_TRIP_ANYWHERE,
+    EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+    EXPO_PUBLIC_ALLOW_CASH_BOOKING: process.env.EXPO_PUBLIC_ALLOW_CASH_BOOKING,
   },
 };

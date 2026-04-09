@@ -23,6 +23,8 @@ type Props = {
   onPromotionResolved: (p: { id: string; code: string; discountLabel: string } | null) => void;
   booking: boolean;
   onBook: () => void;
+  /** When true, Book is disabled (e.g. payment not ready). */
+  bookDisabled?: boolean;
 };
 
 export function RideOptionsSheet({
@@ -42,6 +44,7 @@ export function RideOptionsSheet({
   onPromotionResolved,
   booking,
   onBook,
+  bookDisabled = false,
 }: Props) {
   const byType = Object.fromEntries(options.map((o) => [o.ride_type, o])) as Record<
     RideType,
@@ -140,7 +143,7 @@ export function RideOptionsSheet({
               : "Book ride"
           }
           loading={booking}
-          disabled={!selected}
+          disabled={!selected || bookDisabled}
           onPress={onBook}
         />
       </View>

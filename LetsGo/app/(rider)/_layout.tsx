@@ -44,6 +44,14 @@ export default function RiderLayout() {
         }}
       />
       <Stack.Screen
+        name="trip-awaiting-pickup"
+        options={{
+          headerShown: false,
+          gestureEnabled: false,
+          animation: "slide_from_bottom",
+        }}
+      />
+      <Stack.Screen
         name="trip-live"
         options={{
           headerShown: false,
@@ -57,6 +65,16 @@ export default function RiderLayout() {
           headerShown: false,
           gestureEnabled: false,
           animation: "fade",
+        }}
+      />
+      <Stack.Screen
+        name="payment-methods"
+        options={{
+          headerShown: true,
+          title: "Payment methods",
+          headerStyle: { backgroundColor: "#0A0E1A" },
+          headerTintColor: "#FFFFFF",
+          headerTitleStyle: { fontFamily: "Inter_600SemiBold" },
         }}
       />
     </Stack>

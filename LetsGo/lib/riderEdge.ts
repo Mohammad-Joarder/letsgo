@@ -60,7 +60,66 @@ export type CreateTripPayload = {
   notes?: string | null;
   scheduled_for?: string | null;
   payment_method?: "card" | "wallet" | "cash";
+  /** Required for card bookings after Stripe authorize (Phase 5). */
+  stripe_payment_intent_id?: string;
 };
+
+export async function createPaymentIntent(body: {
+  amount_cents: number;
+  trip_id?: string;
+  payment_method_id?: string;
+}): Promise<{
+  ok: boolean;
+  client_secret?: string;
+  payment_intent_id?: string;
+  error?: string;
+}> {
+  return invoke("create-payment-intent", body as unknown as Record<string, unknown>);
+}
+
+export type RiderPaymentMethodRow = {
+  id: string;
+  brand: string;
+  last4: string;
+  exp_month: number;
+  exp_year: number;
+  is_default: boolean;
+};
+
+export async function riderStripePaymentMethods(body: {
+  action: "list" | "attach" | "detach" | "set_default";
+  payment_method_id?: string;
+}): Promise<{
+  ok: boolean;
+  payment_methods?: RiderPaymentMethodRow[];
+  default_payment_method_id?: string | null;
+  error?: string;
+}> {
+  return invoke("rider-stripe-payment-methods", body as unknown as Record<string, unknown>);
+}
+
+export async function chargeRiderTip(body: {
+  trip_id: string;
+  amount_cents: number;
+  payment_method_id?: string;
+}): Promise<{
+  ok: boolean;
+  payment_intent_id?: string;
+  requires_action?: boolean;
+  client_secret?: string;
+  error?: string;
+}> {
+  return invoke("charge-rider-tip", body as unknown as Record<string, unknown>);
+}
+
+export async function riderCancelTrip(tripId: string): Promise<{
+  ok: boolean;
+  fee_aud?: number;
+  free_cancellation?: boolean;
+  error?: string;
+}> {
+  return invoke("rider-cancel-trip", { trip_id: tripId });
+}
 
 export async function createTrip(body: CreateTripPayload): Promise<CreateTripResponse> {
   const payload = body as unknown as Record<string, unknown>;

@@ -39,11 +39,14 @@ export default function DriverHomeScreen() {
   const [offerVisible, setOfferVisible] = useState(false);
   const [assignLoading, setAssignLoading] = useState(false);
   const [locError, setLocError] = useState<string | null>(null);
+  const [tabFocused, setTabFocused] = useState(true);
+  const [driverStatus, setDriverStatus] = useState<string | null>(null);
 
   const { coord, region, onRegionChangeComplete, syncError } = useDriverMapLocation({
-    active: isOnline,
+    active: isOnline && tabFocused && driverStatus !== "on_trip",
     mapRef,
     serverPushIntervalMs: 5000,
+    exponentialBackoffOnPushFailure: true,
   });
 
   const pulse = useSharedValue(1);
@@ -73,6 +76,7 @@ export default function DriverHomeScreen() {
       .maybeSingle();
     if (!error && data) {
       setIsOnline(Boolean(data.is_online) && data.current_status !== "offline");
+      setDriverStatus(data.current_status ?? null);
       setRating(data.rating != null ? Number(data.rating) : null);
     }
     setDriverRowLoading(false);
@@ -96,10 +100,29 @@ export default function DriverHomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      setTabFocused(true);
       void loadDriverRow();
       void loadTodayStats();
+      return () => setTabFocused(false);
     }, [loadDriverRow, loadTodayStats])
   );
+
+  useEffect(() => {
+    if (!isOnline || !user?.id) return undefined;
+    const tick = () => {
+      void (async () => {
+        const { data } = await supabase
+          .from("drivers")
+          .select("current_status")
+          .eq("id", user.id)
+          .maybeSingle();
+        if (data?.current_status) setDriverStatus(data.current_status);
+      })();
+    };
+    tick();
+    const id = setInterval(tick, 2500);
+    return () => clearInterval(id);
+  }, [isOnline, user?.id]);
 
   const resumeActiveTrip = useCallback(async () => {
     if (!user?.id) return;

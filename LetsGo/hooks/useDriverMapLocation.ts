@@ -14,6 +14,7 @@ export type UseDriverMapLocationParams = {
   active: boolean;
   mapRef: React.RefObject<MapView | null>;
   serverPushIntervalMs?: number;
+  exponentialBackoffOnPushFailure?: boolean;
 };
 
 /**
@@ -23,6 +24,7 @@ export function useDriverMapLocation({
   active,
   mapRef,
   serverPushIntervalMs = 5000,
+  exponentialBackoffOnPushFailure = false,
 }: UseDriverMapLocationParams) {
   const [coord, setCoord] = useState<{ lat: number; lng: number } | null>(null);
   const [region, setRegion] = useState<Region>(INITIAL_REGION);
@@ -65,11 +67,12 @@ export function useDriverMapLocation({
         timeIntervalMs: 3000,
         distanceIntervalM: 12,
         pushToServer: true,
+        exponentialBackoffOnPushFailure,
       }
     );
 
     return stop;
-  }, [active, mapRef, serverPushIntervalMs]);
+  }, [active, mapRef, serverPushIntervalMs, exponentialBackoffOnPushFailure]);
 
   return {
     coord,

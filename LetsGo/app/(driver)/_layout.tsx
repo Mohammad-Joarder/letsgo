@@ -1,3 +1,4 @@
+import type { Href } from "expo-router";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -5,13 +6,23 @@ import { useAuth } from "@/hooks/useAuth";
 export default function DriverLayout() {
   const router = useRouter();
   const segments = useSegments();
-  const { initialized, session, profile, profileLoading, driverApproval, configError } = useAuth();
+  const {
+    initialized,
+    session,
+    profile,
+    profileLoading,
+    driverApproval,
+    driverStripeConnectOnboarded,
+    configError,
+  } = useAuth();
 
   const driverGateOk =
     Boolean(session) &&
     profile?.role === "driver" &&
     driverApproval === "approved";
   const blockUntilProfileKnown = profileLoading && !driverGateOk;
+
+  const onStripeOnboarding = (segments as string[]).includes("stripe-onboarding");
 
   useEffect(() => {
     if (!initialized || configError || blockUntilProfileKnown) return;
@@ -28,6 +39,15 @@ export default function DriverLayout() {
       if (group === "(auth)" && leaf === "driver-review-pending") return;
       if (group !== "(driver)") return;
       router.replace("/(auth)/driver-review-pending");
+      return;
+    }
+
+    if (driverStripeConnectOnboarded === false && !onStripeOnboarding) {
+      router.replace("/(driver)/stripe-onboarding" as Href);
+      return;
+    }
+    if (driverStripeConnectOnboarded === true && onStripeOnboarding) {
+      router.replace("/(driver)/(tabs)/home" as Href);
     }
   }, [
     initialized,
@@ -36,6 +56,8 @@ export default function DriverLayout() {
     session,
     profile?.role,
     driverApproval,
+    driverStripeConnectOnboarded,
+    onStripeOnboarding,
     segments,
     router,
   ]);
@@ -55,6 +77,7 @@ export default function DriverLayout() {
         contentStyle: { backgroundColor: "#0A0E1A" },
       }}
     >
+      <Stack.Screen name="stripe-onboarding" />
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="pickup-navigation" />
       <Stack.Screen name="trip-active" />

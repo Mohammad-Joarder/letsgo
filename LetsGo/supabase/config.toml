@@ -20,6 +20,26 @@ verify_jwt = false
 [functions.complete-trip]
 verify_jwt = false
 
+# Rider cancellation rules + driver status reset; validates session + rider profile inside.
+[functions.rider-cancel-trip]
+verify_jwt = false
+
 # Driver payout; same internal auth pattern.
 [functions.create-payout]
+verify_jwt = false
+
+# Stripe + session validated inside each function.
+[functions.create-payment-intent]
+verify_jwt = false
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.create-connect-account]
+verify_jwt = false
+
+[functions.rider-stripe-payment-methods]
+verify_jwt = false
+
+[functions.charge-rider-tip]
 verify_jwt = false

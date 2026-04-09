@@ -17,6 +17,8 @@ type AuthContextValue = {
   user: User | null;
   profile: Profile | null;
   driverApproval: DriverApprovalStatus | null;
+  /** Set when `profile.role === "driver"` after the drivers row is loaded; otherwise `null`. */
+  driverStripeConnectOnboarded: boolean | null;
   configError: string | null;
   refreshProfile: () => Promise<void>;
 };
@@ -29,15 +31,22 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
   return data as Profile | null;
 }
 
-async function fetchDriverApproval(userId: string): Promise<DriverApprovalStatus | null> {
+async function fetchDriverState(userId: string): Promise<{
+  approval: DriverApprovalStatus;
+  stripeConnectOnboarded: boolean;
+} | null> {
   const { data, error } = await supabase
     .from("drivers")
-    .select("approval_status")
+    .select("approval_status, stripe_connect_onboarded")
     .eq("id", userId)
     .maybeSingle();
   if (error) throw error;
   if (!data) return null;
-  return (data as DriverRow).approval_status;
+  const row = data as DriverRow;
+  return {
+    approval: row.approval_status,
+    stripeConnectOnboarded: Boolean(row.stripe_connect_onboarded),
+  };
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -46,12 +55,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [driverApproval, setDriverApproval] = useState<DriverApprovalStatus | null>(null);
+  const [driverStripeConnectOnboarded, setDriverStripeConnectOnboarded] = useState<boolean | null>(
+    null
+  );
   const [configError, setConfigError] = useState<string | null>(null);
 
   const loadProfileForUser = useCallback(async (userId: string | undefined) => {
     if (!userId) {
       setProfile(null);
       setDriverApproval(null);
+      setDriverStripeConnectOnboarded(null);
       setProfileLoading(false);
       return;
     }
@@ -60,15 +73,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const p = await fetchProfile(userId);
       setProfile(p);
       if (p?.role === "driver") {
-        const status = await fetchDriverApproval(userId);
-        setDriverApproval(status);
+        const d = await fetchDriverState(userId);
+        setDriverApproval(d?.approval ?? null);
+        setDriverStripeConnectOnboarded(d ? d.stripeConnectOnboarded : null);
       } else {
         setDriverApproval(null);
+        setDriverStripeConnectOnboarded(null);
       }
     } catch (e) {
       console.error("[Lets Go] Profile load failed:", e);
       setProfile(null);
       setDriverApproval(null);
+      setDriverStripeConnectOnboarded(null);
     } finally {
       setProfileLoading(false);
     }
@@ -105,6 +121,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setSession(null);
           setProfile(null);
           setDriverApproval(null);
+          setDriverStripeConnectOnboarded(null);
         }
       } finally {
         if (!cancelled) setInitialized(true);
@@ -144,10 +161,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user: session?.user ?? null,
       profile,
       driverApproval,
+      driverStripeConnectOnboarded,
       configError,
       refreshProfile,
     }),
-    [initialized, profileLoading, session, profile, driverApproval, configError, refreshProfile]
+    [
+      initialized,
+      profileLoading,
+      session,
+      profile,
+      driverApproval,
+      driverStripeConnectOnboarded,
+      configError,
+      refreshProfile,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

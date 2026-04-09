@@ -19,17 +19,24 @@ import Animated, {
 } from "react-native-reanimated";
 import { DestinationSearch } from "@/components/rider/DestinationSearch";
 import { DriverMarker } from "@/components/rider/DriverMarker";
+import {
+  RiderBookingPaymentBlock,
+  type PayMode,
+  type RiderBookingPaymentHandle,
+} from "@/components/rider/RiderBookingPaymentBlock";
 import { RideOptionsSheet } from "@/components/rider/RideOptionsSheet";
 import { RoutePolyline } from "@/components/rider/RoutePolyline";
 import { SchedulePicker } from "@/components/rider/SchedulePicker";
 import { Avatar } from "@/components/ui/Avatar";
 import { useAuth } from "@/hooks/useAuth";
+import { useNearbyDrivers } from "@/hooks/useNearbyDrivers";
 import { useProfile } from "@/hooks/useProfile";
 import { useRiderMapLocation } from "@/hooks/useRiderMapLocation";
-import type { FareEstimateOption, NearbyDriver, ResolvedPlace, RideType } from "@/lib/bookingTypes";
+import type { FareEstimateOption, ResolvedPlace, RideType } from "@/lib/bookingTypes";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
 import { mapDarkStyle } from "@/lib/mapDarkStyle";
-import { createTrip, getFareEstimate, searchNearbyDrivers } from "@/lib/riderEdge";
+import { createTrip, getFareEstimate } from "@/lib/riderEdge";
+import { allowCashBookingDemo, isStripeConfigured } from "@/lib/stripeConfig";
 import { supabase } from "@/lib/supabase";
 
 type Phase = "idle" | "destination" | "ride_options";
@@ -60,6 +67,10 @@ export default function RiderHomeScreen() {
       router.replace(`/(rider)/trip-live?tripId=${data.id}` as Href);
       return;
     }
+    if (data.status === "driver_accepted" || data.status === "driver_arrived") {
+      router.replace(`/(rider)/trip-awaiting-pickup?tripId=${encodeURIComponent(data.id)}` as Href);
+      return;
+    }
     router.replace(`/(rider)/searching?tripId=${encodeURIComponent(data.id)}` as Href);
   }, [user?.id, router]);
 
@@ -78,7 +89,6 @@ export default function RiderHomeScreen() {
   const [pickup, setPickup] = useState<ResolvedPlace | null>(null);
   const [dropoff, setDropoff] = useState<ResolvedPlace | null>(null);
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
-  const [drivers, setDrivers] = useState<NearbyDriver[]>([]);
   const [estimateLoading, setEstimateLoading] = useState(false);
   const [estimateError, setEstimateError] = useState<string | null>(null);
   const [fareOptions, setFareOptions] = useState<FareEstimateOption[]>([]);
@@ -97,6 +107,20 @@ export default function RiderHomeScreen() {
     discountLabel: string;
   } | null>(null);
   const [booking, setBooking] = useState(false);
+  const paymentRef = useRef<RiderBookingPaymentHandle>(null);
+  const [payMode, setPayMode] = useState<PayMode>(() =>
+    allowCashBookingDemo() && !isStripeConfigured() ? "cash" : "card"
+  );
+  const [paymentReady, setPaymentReady] = useState(true);
+
+  const isWeb = Platform.OS === "web";
+
+  useEffect(() => {
+    if (isWeb) {
+      if (allowCashBookingDemo()) setPayMode("cash");
+      setPaymentReady(allowCashBookingDemo());
+    }
+  }, [isWeb]);
 
   const surgePulse = useSharedValue(1);
   useEffect(() => {
@@ -131,36 +155,16 @@ export default function RiderHomeScreen() {
     });
   }, [userCoord?.lat, userCoord?.lng]);
 
-  useEffect(() => {
-    if (phase !== "idle" && phase !== "ride_options") return;
-    let alive = true;
-    const rideType = phase === "ride_options" ? selectedRideType : "economy";
-    const lat = pickup?.lat ?? userCoord?.lat;
-    const lng = pickup?.lng ?? userCoord?.lng;
-    if (lat == null || lng == null) return;
-
-    async function poll() {
-      try {
-        const res = await searchNearbyDrivers({
-          pickup_lat: lat!,
-          pickup_lng: lng!,
-          ride_type: rideType,
-          radius_km: 5,
-        });
-        if (!alive) return;
-        if (res.ok && res.drivers) setDrivers(res.drivers);
-      } catch {
-        /* ignore poll errors */
-      }
-    }
-
-    void poll();
-    const id = setInterval(poll, 10_000);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [phase, pickup?.lat, pickup?.lng, userCoord?.lat, userCoord?.lng, selectedRideType]);
+  const pollLat = pickup?.lat ?? userCoord?.lat;
+  const pollLng = pickup?.lng ?? userCoord?.lng;
+  const { drivers } = useNearbyDrivers({
+    pickupLat: pollLat,
+    pickupLng: pollLng,
+    rideType: phase === "ride_options" ? selectedRideType : "economy",
+    enabled: phase === "idle" || phase === "ride_options",
+    radiusKm: 5,
+    intervalMs: 10_000,
+  });
 
   useEffect(() => {
     if (!pickup || !dropoff) {
@@ -257,6 +261,10 @@ export default function RiderHomeScreen() {
   const selectedOption =
     fareOptions.find((o) => o.ride_type === selectedRideType) ?? fareOptions[0];
 
+  const bookPaymentBlocked =
+    phase === "ride_options" &&
+    (isWeb ? !allowCashBookingDemo() : !paymentReady);
+
   const scheduledLabel =
     scheduledFor != null
       ? scheduledFor.toLocaleString(undefined, {
@@ -270,8 +278,28 @@ export default function RiderHomeScreen() {
 
   async function onBook() {
     if (!pickup || !dropoff || !selectedOption || !user?.id) return;
+    if (isWeb && !allowCashBookingDemo()) {
+      setEstimateError("Use the iOS or Android app for card bookings with Stripe.");
+      return;
+    }
     setBooking(true);
     try {
+      let stripe_payment_intent_id: string | undefined;
+      let payment_method: "card" | "cash" = "card";
+
+      if (isWeb || payMode === "cash") {
+        if (!allowCashBookingDemo()) {
+          throw new Error("Enable EXPO_PUBLIC_ALLOW_CASH_BOOKING=true for cash demo, or use a card on mobile.");
+        }
+        payment_method = "cash";
+      } else {
+        const auth = await paymentRef.current?.authorizeForBooking();
+        if (!auth?.stripe_payment_intent_id) {
+          throw new Error("Could not authorise payment.");
+        }
+        stripe_payment_intent_id = auth.stripe_payment_intent_id;
+      }
+
       const tripPayload = {
         ride_type: selectedRideType,
         pickup_address: pickup.description,
@@ -291,7 +319,8 @@ export default function RiderHomeScreen() {
         notes: notes.trim() || null,
         scheduled_for:
           scheduleEnabled && scheduledFor ? scheduledFor.toISOString() : null,
-        payment_method: "card" as const,
+        payment_method,
+        ...(stripe_payment_intent_id ? { stripe_payment_intent_id } : {}),
       };
       const res = await createTrip(tripPayload);
       if (!res.ok || !res.trip_id) {
@@ -474,27 +503,49 @@ export default function RiderHomeScreen() {
               ) : estimateError ? (
                 <Text className="font-inter py-4 text-center text-sm text-error">{estimateError}</Text>
               ) : (
-                <RideOptionsSheet
-                  surgeActive={surgeActive}
-                  surgeMultiplier={surgeMultiplier}
-                  options={fareOptions}
-                  distanceKm={distanceKm}
-                  durationMin={durationMin}
-                  selectedRideType={selectedRideType}
-                  onSelectRideType={setSelectedRideType}
-                  notes={notes}
-                  onNotesChange={setNotes}
-                  scheduleEnabled={scheduleEnabled}
-                  onScheduleEnabledChange={(v) => {
-                    setScheduleEnabled(v);
-                    if (!v) setScheduledFor(null);
-                  }}
-                  onOpenSchedule={() => setScheduleModal(true)}
-                  scheduledLabel={scheduledLabel}
-                  onPromotionResolved={setPromotion}
-                  booking={booking}
-                  onBook={() => void onBook()}
-                />
+                <>
+                  {selectedOption ? (
+                    isWeb ? (
+                      <View className="mb-4 rounded-xl border border-border/60 bg-surface2/50 px-3 py-3">
+                        <Text className="font-inter text-xs text-textSecondary">
+                          {allowCashBookingDemo()
+                            ? "Web: cash demo only. Use the mobile app for Stripe card bookings."
+                            : "Open Lets Go on iOS or Android to book with a saved card."}
+                        </Text>
+                      </View>
+                    ) : (
+                      <RiderBookingPaymentBlock
+                        ref={paymentRef}
+                        fareAud={selectedOption.estimated_fare}
+                        payMode={payMode}
+                        onPayModeChange={setPayMode}
+                        onReadinessChange={setPaymentReady}
+                      />
+                    )
+                  ) : null}
+                  <RideOptionsSheet
+                    surgeActive={surgeActive}
+                    surgeMultiplier={surgeMultiplier}
+                    options={fareOptions}
+                    distanceKm={distanceKm}
+                    durationMin={durationMin}
+                    selectedRideType={selectedRideType}
+                    onSelectRideType={setSelectedRideType}
+                    notes={notes}
+                    onNotesChange={setNotes}
+                    scheduleEnabled={scheduleEnabled}
+                    onScheduleEnabledChange={(v) => {
+                      setScheduleEnabled(v);
+                      if (!v) setScheduledFor(null);
+                    }}
+                    onOpenSchedule={() => setScheduleModal(true)}
+                    scheduledLabel={scheduledLabel}
+                    onPromotionResolved={setPromotion}
+                    booking={booking}
+                    bookDisabled={bookPaymentBlocked}
+                    onBook={() => void onBook()}
+                  />
+                </>
               )}
             </View>
           ) : null}

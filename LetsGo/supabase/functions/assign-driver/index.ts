@@ -110,12 +110,14 @@ Deno.serve(async (req) => {
         );
       }
 
+      const acceptedAt = new Date().toISOString();
       const { error: uTrip } = await admin
         .from("trips")
         .update({
           driver_id: user.id,
           vehicle_id: vehicle.id,
           status: "driver_accepted",
+          driver_accepted_at: acceptedAt,
           offer_driver_id: null,
           offer_expires_at: null,
           offer_candidate_ids: [],
