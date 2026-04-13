@@ -10,6 +10,10 @@ import React, {
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import type { DriverApprovalStatus, DriverRow, Profile, UserRole } from "@/lib/types";
 
+export type RefreshProfileResult = {
+  driverStripeConnectOnboarded: boolean | null;
+};
+
 type AuthContextValue = {
   initialized: boolean;
   profileLoading: boolean;
@@ -20,7 +24,11 @@ type AuthContextValue = {
   /** Set when `profile.role === "driver"` after the drivers row is loaded; otherwise `null`. */
   driverStripeConnectOnboarded: boolean | null;
   configError: string | null;
-  refreshProfile: () => Promise<void>;
+  /** After Stripe in-app browser returns, briefly skip forcing onboarding so home can load while webhooks catch up. */
+  suppressDriverStripeGate: (durationMs: number) => void;
+  /** When non-null and in the future, driver layout will not auto-push Stripe onboarding. */
+  driverStripeGateSuppressedUntil: number | null;
+  refreshProfile: () => Promise<RefreshProfileResult>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -58,42 +66,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [driverStripeConnectOnboarded, setDriverStripeConnectOnboarded] = useState<boolean | null>(
     null
   );
+  const [driverStripeGateSuppressedUntil, setDriverStripeGateSuppressedUntil] = useState<
+    number | null
+  >(null);
   const [configError, setConfigError] = useState<string | null>(null);
 
-  const loadProfileForUser = useCallback(async (userId: string | undefined) => {
+  const loadProfileForUser = useCallback(async (userId: string | undefined): Promise<RefreshProfileResult> => {
     if (!userId) {
       setProfile(null);
       setDriverApproval(null);
       setDriverStripeConnectOnboarded(null);
       setProfileLoading(false);
-      return;
+      return { driverStripeConnectOnboarded: null };
     }
     setProfileLoading(true);
     try {
       const p = await fetchProfile(userId);
       setProfile(p);
+      let driverStripe: boolean | null = null;
       if (p?.role === "driver") {
         const d = await fetchDriverState(userId);
         setDriverApproval(d?.approval ?? null);
-        setDriverStripeConnectOnboarded(d ? d.stripeConnectOnboarded : null);
+        driverStripe = d ? d.stripeConnectOnboarded : null;
+        setDriverStripeConnectOnboarded(driverStripe);
       } else {
         setDriverApproval(null);
         setDriverStripeConnectOnboarded(null);
       }
+      return { driverStripeConnectOnboarded: driverStripe };
     } catch (e) {
       console.error("[Lets Go] Profile load failed:", e);
       setProfile(null);
       setDriverApproval(null);
       setDriverStripeConnectOnboarded(null);
+      return { driverStripeConnectOnboarded: null };
     } finally {
       setProfileLoading(false);
     }
   }, []);
 
-  const refreshProfile = useCallback(async () => {
+  const refreshProfile = useCallback(async (): Promise<RefreshProfileResult> => {
     const uid = session?.user?.id;
-    await loadProfileForUser(uid);
+    return loadProfileForUser(uid);
   }, [loadProfileForUser, session?.user?.id]);
+
+  const suppressDriverStripeGate = useCallback((durationMs: number) => {
+    setDriverStripeGateSuppressedUntil(Date.now() + Math.max(0, durationMs));
+  }, []);
+
+  useEffect(() => {
+    if (driverStripeConnectOnboarded === true) {
+      setDriverStripeGateSuppressedUntil(null);
+    }
+  }, [driverStripeConnectOnboarded]);
 
   useEffect(() => {
     let cancelled = false;
@@ -163,6 +188,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       driverApproval,
       driverStripeConnectOnboarded,
       configError,
+      suppressDriverStripeGate,
+      driverStripeGateSuppressedUntil,
       refreshProfile,
     }),
     [
@@ -173,6 +200,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       driverApproval,
       driverStripeConnectOnboarded,
       configError,
+      suppressDriverStripeGate,
+      driverStripeGateSuppressedUntil,
       refreshProfile,
     ]
   );

@@ -38,6 +38,12 @@ verify_jwt = false
 [functions.create-connect-account]
 verify_jwt = false
 
+[functions.create-connect-account-return]
+verify_jwt = false
+
+[functions.sync-driver-stripe-connect]
+verify_jwt = false
+
 [functions.rider-stripe-payment-methods]
 verify_jwt = false
 

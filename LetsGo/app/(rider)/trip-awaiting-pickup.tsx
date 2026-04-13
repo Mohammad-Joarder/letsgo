@@ -34,6 +34,7 @@ export default function TripAwaitingPickupScreen() {
   const { tripId } = useLocalSearchParams<{ tripId: string }>();
   const { user } = useAuth();
   const mapRef = useRef<MapView>(null);
+  const hasFittedRouteRef = useRef(false);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -156,6 +157,10 @@ export default function TripAwaitingPickupScreen() {
   }, [tripId, status, router]);
 
   useEffect(() => {
+    if (!tripId) hasFittedRouteRef.current = false;
+  }, [tripId]);
+
+  useEffect(() => {
     if (!driverLoc || pickupLat === 0) return;
     let alive = true;
     void (async () => {
@@ -163,10 +168,13 @@ export default function TripAwaitingPickupScreen() {
       if (!alive || !route?.coordinates?.length) return;
       setCoords(route.coordinates);
       setEtaMin(Math.max(1, Math.round(route.durationSeconds / 60)));
-      mapRef.current?.fitToCoordinates(route.coordinates, {
-        edgePadding: { top: 120, right: 36, bottom: 280, left: 36 },
-        animated: true,
-      });
+      if (!hasFittedRouteRef.current) {
+        hasFittedRouteRef.current = true;
+        mapRef.current?.fitToCoordinates(route.coordinates, {
+          edgePadding: { top: 120, right: 36, bottom: 280, left: 36 },
+          animated: true,
+        });
+      }
     })();
     return () => {
       alive = false;

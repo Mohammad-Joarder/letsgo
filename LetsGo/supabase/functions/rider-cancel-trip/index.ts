@@ -98,6 +98,8 @@ Deno.serve(async (req) => {
     let feeCents = 0;
 
     if (status === "searching") {
+      const offeredDriverId = trip.offer_driver_id as string | null;
+
       const { error: uErr } = await admin
         .from("trips")
         .update({
@@ -118,6 +120,16 @@ Deno.serve(async (req) => {
         trip_id: tripId,
         status: "cancelled",
       });
+
+      if (offeredDriverId) {
+        await realtimeBroadcast(
+          supabaseUrl,
+          serviceKey,
+          `driver_trip_offers:${offeredDriverId}`,
+          "offer_cancelled",
+          { trip_id: tripId }
+        );
+      }
 
       return new Response(
         JSON.stringify({ ok: true, fee_aud: 0, free_cancellation: true }),

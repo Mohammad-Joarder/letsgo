@@ -41,6 +41,7 @@ export default function SearchingScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [bootLoading, setBootLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
+  const cancelHookRefetchCountRef = useRef(0);
 
   const radar = useSharedValue(0.6);
   useEffect(() => {
@@ -84,36 +85,57 @@ export default function SearchingScreen() {
     void loadTrip();
   }, [loadTrip]);
 
+  useEffect(() => {
+    cancelHookRefetchCountRef.current = 0;
+  }, [tripId]);
+
   const { status } = useTripStatus(tripId, { enabled: Boolean(tripId) });
 
   const mergedStatus = status ?? trip?.status ?? null;
 
   useEffect(() => {
-    if (!tripId || !mergedStatus) return;
-    if (mergedStatus === "driver_accepted" || mergedStatus === "driver_arrived") {
+    if (!trip || bootLoading || trip.status !== "searching") return;
+    if (!status || status === "searching") return;
+    if (status === "cancelled") {
+      if (cancelHookRefetchCountRef.current >= 1) return;
+      cancelHookRefetchCountRef.current += 1;
+      void loadTrip();
+      return;
+    }
+    void loadTrip();
+  }, [status, trip, bootLoading, loadTrip]);
+
+  useEffect(() => {
+    if (!tripId || bootLoading || !trip) return;
+    const st = mergedStatus ?? trip.status;
+    if (!st) return;
+
+    if (trip.status === "cancelled" || trip.status === "no_driver_found") {
+      router.replace("/(rider)/(tabs)/home" as Href);
+      return;
+    }
+
+    if (st === "driver_accepted" || st === "driver_arrived") {
       router.replace(
         `/(rider)/trip-awaiting-pickup?tripId=${encodeURIComponent(tripId)}` as Href
       );
       return;
     }
-    if (mergedStatus === "in_progress") {
+    if (st === "in_progress") {
       router.replace(`/(rider)/trip-live?tripId=${encodeURIComponent(tripId)}` as Href);
       return;
     }
-    if (mergedStatus === "completed") {
+    if (st === "completed") {
       router.replace(`/(rider)/trip-complete?tripId=${encodeURIComponent(tripId)}` as Href);
       return;
     }
-    if (mergedStatus === "cancelled" || mergedStatus === "no_driver_found") {
-      router.replace("/(rider)/(tabs)/home" as Href);
-    }
-  }, [tripId, mergedStatus, router]);
+  }, [tripId, trip, bootLoading, mergedStatus, router, loadTrip]);
 
   const { drivers } = useNearbyDrivers({
     pickupLat: trip?.pickup_lat,
     pickupLng: trip?.pickup_lng,
     rideType: trip?.ride_type ?? "economy",
-    enabled: Boolean(trip && mergedStatus === "searching"),
+    enabled: Boolean(trip && trip.status === "searching"),
     intervalMs: 10_000,
   });
 
@@ -191,7 +213,7 @@ export default function SearchingScreen() {
     );
   }
 
-  if (mergedStatus !== "searching") {
+  if (trip.status !== "searching") {
     return (
       <SafeAreaWrapper edges={["top", "left", "right", "bottom"]}>
         <View className="flex-1 items-center justify-center bg-background">

@@ -46,6 +46,7 @@ export default function RiderTripLiveScreen() {
   const { tripId } = useLocalSearchParams<{ tripId: string }>();
   const { user } = useAuth();
   const mapRef = useRef<MapView>(null);
+  const hasFittedRouteRef = useRef(false);
 
   const [trip, setTrip] = useState<TripRow | null>(null);
   const [driverName, setDriverName] = useState<string | null>(null);
@@ -136,6 +137,10 @@ export default function RiderTripLiveScreen() {
   }, [tripId, status, goComplete, router]);
 
   useEffect(() => {
+    if (!tripId) hasFittedRouteRef.current = false;
+  }, [tripId]);
+
+  useEffect(() => {
     if (!trip || trip.status !== "in_progress") return;
     if (!driverLoc) return;
     let alive = true;
@@ -149,10 +154,13 @@ export default function RiderTripLiveScreen() {
       if (!alive || !route?.coordinates?.length) return;
       setCoords(route.coordinates);
       setEtaMin(Math.max(1, Math.round(route.durationSeconds / 60)));
-      mapRef.current?.fitToCoordinates(route.coordinates, {
-        edgePadding: { top: 110, right: 40, bottom: 220, left: 40 },
-        animated: true,
-      });
+      if (!hasFittedRouteRef.current) {
+        hasFittedRouteRef.current = true;
+        mapRef.current?.fitToCoordinates(route.coordinates, {
+          edgePadding: { top: 110, right: 40, bottom: 220, left: 40 },
+          animated: true,
+        });
+      }
     })();
     return () => {
       alive = false;

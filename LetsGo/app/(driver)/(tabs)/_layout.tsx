@@ -1,11 +1,15 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
+import { Fragment } from "react";
+import { DriverTripOffersHost } from "@/components/driver/DriverTripOffersHost";
 
 export default function DriverTabsLayout() {
   return (
+    <Fragment>
     <Tabs
       screenOptions={{
         headerShown: false,
+        lazy: false,
         tabBarStyle: {
           backgroundColor: "#131929",
           borderTopColor: "#1E2D45",
@@ -46,5 +50,7 @@ export default function DriverTabsLayout() {
         }}
       />
     </Tabs>
+    <DriverTripOffersHost />
+    </Fragment>
   );
 }

@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
 
     const { data: profile, error: pErr } = await admin
       .from("profiles")
-      .select("id, role, stripe_customer_id")
+      .select("id, role, stripe_customer_id, email, full_name")
       .eq("id", user.id)
       .single();
 
@@ -61,17 +61,28 @@ Deno.serve(async (req) => {
       });
     }
 
-    const customerId = profile.stripe_customer_id as string | null;
-    if (!customerId) {
-      return new Response(
-        JSON.stringify({ ok: true, payment_methods: [], default_payment_method_id: null }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    const stripe = getStripe();
+    let customerId = profile.stripe_customer_id as string | null;
+
+    async function ensureStripeCustomer(): Promise<string> {
+      if (customerId) return customerId;
+      const customer = await stripe.customers.create({
+        email: (profile.email as string | null) ?? undefined,
+        name: (profile.full_name as string | null) ?? undefined,
+        metadata: { supabase_user_id: user.id },
+      });
+      customerId = customer.id;
+      await admin.from("profiles").update({ stripe_customer_id: customerId }).eq("id", user.id);
+      return customerId;
     }
 
-    const stripe = getStripe();
-
     if (action === "list") {
+      if (!customerId) {
+        return new Response(
+          JSON.stringify({ ok: true, payment_methods: [], default_payment_method_id: null }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
       const customer = await stripe.customers.retrieve(customerId, {
         expand: ["invoice_settings.default_payment_method"],
       });
@@ -112,14 +123,18 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+      const cid = await ensureStripeCustomer();
       const pm = await stripe.paymentMethods.retrieve(pmId);
-      if (pm.customer !== customerId) {
+      if (pm.customer && pm.customer !== cid) {
         return new Response(JSON.stringify({ ok: false, error: "Invalid payment method" }), {
           status: 403,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      await stripe.customers.update(customerId, {
+      if (!pm.customer) {
+        await stripe.paymentMethods.attach(pmId, { customer: cid });
+      }
+      await stripe.customers.update(cid, {
         invoice_settings: { default_payment_method: pmId },
       });
       return new Response(JSON.stringify({ ok: true }), {
@@ -135,7 +150,8 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      await stripe.paymentMethods.attach(pmId, { customer: customerId });
+      const cid = await ensureStripeCustomer();
+      await stripe.paymentMethods.attach(pmId, { customer: cid });
       return new Response(JSON.stringify({ ok: true }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -145,6 +161,12 @@ Deno.serve(async (req) => {
       const pmId = body?.payment_method_id;
       if (!pmId) {
         return new Response(JSON.stringify({ ok: false, error: "payment_method_id required" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (!customerId) {
+        return new Response(JSON.stringify({ ok: false, error: "No saved cards" }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });

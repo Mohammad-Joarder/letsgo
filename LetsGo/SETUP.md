@@ -28,6 +28,8 @@ After changing plugins, run a **development build** (or `expo prebuild`) so nati
 
 Set these in **Project Settings → Edge Functions → Secrets** (do **not** prefix custom Stripe secrets with `SUPABASE_`).
 
+**Automate Stripe secrets (Phase 5):** copy `supabase/.env.stripe.example` to `supabase/.env.stripe`, fill in values, ensure the project is linked (`npx supabase link`), then from the `LetsGo` folder run **`npm run secrets:stripe`**. Optional: `npm run secrets:stripe -- --project-ref <ref>`.
+
 | Secret | Purpose |
 |--------|---------|
 | `STRIPE_SECRET_KEY` | Stripe secret API key. |

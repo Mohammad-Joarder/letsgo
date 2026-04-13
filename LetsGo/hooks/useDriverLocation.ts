@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { formatRealtimeSubscribeErr } from "@/lib/formatRealtimeSubscribeErr";
 import { bearingDegrees, easeOutCubic, interpolateLatLng } from "@/lib/geo";
 import { removeSupabaseChannelsForTopic } from "@/lib/realtimeChannelTeardown";
 import { supabase } from "@/lib/supabase";
@@ -110,7 +111,11 @@ export function useDriverLocation(driverId: string | null | undefined, enabled =
             if (cancelled) return;
             if (state === "SUBSCRIBED") reconnectAttemptRef.current = 0;
             if (state === "CHANNEL_ERROR" || state === "TIMED_OUT") {
-              console.warn("[useDriverLocation]", state, err?.message);
+              if (__DEV__) {
+                console.debug(
+                  `[useDriverLocation] ${state}: ${formatRealtimeSubscribeErr(err)} · reconnect scheduled`
+                );
+              }
               if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
               const delay = Math.min(
                 30_000,

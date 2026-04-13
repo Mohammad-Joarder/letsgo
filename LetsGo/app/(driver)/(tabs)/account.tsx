@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useRouter, type Href } from "expo-router";
 import * as Linking from "expo-linking";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Pressable, ScrollView, Text, View } from "react-native";
@@ -46,6 +46,7 @@ export default function DriverAccountScreen() {
   const [docs, setDocs] = useState<DocRow[]>([]);
   const [bsb, setBsb] = useState<string | null>(null);
   const [acct, setAcct] = useState<string | null>(null);
+  const [stripePayoutsReady, setStripePayoutsReady] = useState<boolean | null>(null);
   const [reviews, setReviews] = useState<{ rating: number; comment: string | null }[]>([]);
   const [navPref, setNavPref] = useState<"google" | "waze" | "apple">("google");
 
@@ -53,7 +54,9 @@ export default function DriverAccountScreen() {
     if (!user?.id) return;
     const { data: d } = await supabase
       .from("drivers")
-      .select("approval_status, rating, total_trips, bank_bsb, bank_account_number")
+      .select(
+        "approval_status, rating, total_trips, bank_bsb, bank_account_number, stripe_connect_onboarded"
+      )
       .eq("id", user.id)
       .maybeSingle();
     if (d) {
@@ -62,6 +65,9 @@ export default function DriverAccountScreen() {
       setTotalTrips(Number(d.total_trips ?? 0));
       setBsb(d.bank_bsb ?? null);
       setAcct(d.bank_account_number ?? null);
+      setStripePayoutsReady(
+        typeof d.stripe_connect_onboarded === "boolean" ? d.stripe_connect_onboarded : null
+      );
     }
     const { data: v } = await supabase
       .from("vehicles")
@@ -169,10 +175,31 @@ export default function DriverAccountScreen() {
           )}
         </Card>
 
-        <SectionTitle>Bank</SectionTitle>
+        <SectionTitle>Payouts & bank</SectionTitle>
         <Card>
-          <Text className="font-inter text-sm text-textSecondary">BSB: {maskedBsb}</Text>
-          <Text className="font-inter mt-1 text-sm text-textSecondary">Account: {maskedAcct}</Text>
+          <Text className="font-inter text-sm font-semibold text-text">Stripe Express</Text>
+          <Text className="font-inter mt-2 text-sm leading-5 text-textSecondary">
+            {stripePayoutsReady === true
+              ? "Payout account is connected. Bank and tax details are stored securely in Stripe — they are not copied into this app."
+              : stripePayoutsReady === false
+                ? "Finish Stripe onboarding to receive payouts. Open Payouts to connect your account."
+                : "Loading payout status…"}
+          </Text>
+          <Button
+            title={stripePayoutsReady ? "Update bank or tax in Stripe" : "Set up payouts (Stripe)"}
+            variant="secondary"
+            className="mt-4"
+            onPress={() => router.push("/(driver)/stripe-onboarding" as Href)}
+          />
+          {(bsb || acct) && (
+            <View className="mt-4 border-t border-border/60 pt-4">
+              <Text className="font-inter text-xs font-semibold uppercase text-textSecondary">
+                Legacy fields on file
+              </Text>
+              <Text className="font-inter mt-2 text-sm text-textSecondary">BSB: {maskedBsb}</Text>
+              <Text className="font-inter mt-1 text-sm text-textSecondary">Account: {maskedAcct}</Text>
+            </View>
+          )}
         </Card>
 
         <SectionTitle>Ratings & reviews</SectionTitle>

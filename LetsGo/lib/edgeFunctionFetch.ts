@@ -6,12 +6,18 @@ import Constants from "expo-constants";
  */
 function getSupabasePublicConfig(): { url: string; anonKey: string } {
   const extra = Constants.expoConfig?.extra as Record<string, string | undefined> | undefined;
-  const url = (process.env.EXPO_PUBLIC_SUPABASE_URL ?? extra?.EXPO_PUBLIC_SUPABASE_URL ?? "").replace(
-    /\/$/,
+  const url = (
+    process.env.EXPO_PUBLIC_SUPABASE_URL ??
+    extra?.EXPO_PUBLIC_SUPABASE_URL ??
     ""
-  );
-  const anonKey =
-    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? extra?.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
+  )
+    .trim()
+    .replace(/\/$/, "");
+  const anonKey = (
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ??
+    extra?.EXPO_PUBLIC_SUPABASE_ANON_KEY ??
+    ""
+  ).trim();
   return { url, anonKey };
 }
 

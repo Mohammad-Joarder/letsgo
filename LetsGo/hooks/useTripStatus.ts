@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { formatRealtimeSubscribeErr } from "@/lib/formatRealtimeSubscribeErr";
 import { removeSupabaseChannelsForTopic } from "@/lib/realtimeChannelTeardown";
 import { supabase } from "@/lib/supabase";
 
@@ -16,7 +17,11 @@ const VALID_FROM_SEARCHING: TripLifecycleStatus[] = [
   "no_driver_found",
   "cancelled",
 ];
-const VALID_FROM_ACCEPTED: TripLifecycleStatus[] = ["driver_arrived", "cancelled"];
+/**
+ * Include `in_progress` so a rider who missed `driver_arrived` (no broadcast for client-only DB
+ * updates, or postgres_changes unavailable on RN) still accepts the trip-started transition.
+ */
+const VALID_FROM_ACCEPTED: TripLifecycleStatus[] = ["driver_arrived", "in_progress", "cancelled"];
 const VALID_FROM_ARRIVED: TripLifecycleStatus[] = ["in_progress", "cancelled"];
 const VALID_FROM_PROGRESS: TripLifecycleStatus[] = ["completed"];
 
@@ -82,13 +87,12 @@ export function useTripStatus(
       return;
     }
     if (data?.status) {
-      statusRef.current = data.status as string;
-      setStatus(data.status as string);
+      applyStatus(data.status as string);
       setError(null);
     }
     hydratedRef.current = true;
     setLoading(false);
-  }, [tripId, enabled]);
+  }, [tripId, enabled, applyStatus]);
 
   useEffect(() => {
     if (!tripId || !enabled) {
@@ -110,6 +114,8 @@ export function useTripStatus(
     let cancelled = false;
     let reconnectAttempt = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    /** `postgres_changes` sometimes triggers CHANNEL_ERROR on RN; broadcast from Edge still works. */
+    let usePostgresChanges = true;
 
     const connect = () => {
       if (cancelled) return;
@@ -118,13 +124,13 @@ export function useTripStatus(
         await removeSupabaseChannelsForTopic(supabase, topic);
         if (cancelled) return;
 
-        const ch = supabase
-          .channel(topic)
-          .on("broadcast", { event: "status" }, ({ payload }) => {
-            const p = payload as { status?: string };
-            if (p?.status) applyStatus(p.status);
-          })
-          .on(
+        let ch = supabase.channel(topic).on("broadcast", { event: "status" }, ({ payload }) => {
+          const p = payload as { status?: string };
+          if (p?.status) applyStatus(p.status);
+        });
+
+        if (usePostgresChanges) {
+          ch = ch.on(
             "postgres_changes",
             {
               event: "UPDATE",
@@ -136,23 +142,49 @@ export function useTripStatus(
               const next = (payload.new as { status?: string })?.status;
               if (next) applyStatus(next);
             }
-          )
-          .subscribe((state, err) => {
-            if (cancelled) return;
-            if (state === "SUBSCRIBED") {
-              reconnectAttempt = 0;
-            }
-            if (state === "CHANNEL_ERROR" || state === "TIMED_OUT") {
-              console.warn("[useTripStatus]", state, err?.message);
+          );
+        }
+
+        ch.subscribe((state, err) => {
+          if (cancelled) return;
+          if (state === "SUBSCRIBED") {
+            reconnectAttempt = 0;
+            return;
+          }
+          if (state === "CHANNEL_ERROR" || state === "TIMED_OUT") {
+            const detail = formatRealtimeSubscribeErr(err);
+
+            if (state === "CHANNEL_ERROR" && usePostgresChanges) {
+              usePostgresChanges = false;
+              /* Expected on many RN builds; broadcast path is enough. Avoid console.warn noise. */
+              if (__DEV__) {
+                console.debug(
+                  `[useTripStatus] ${state}: ${detail} · retrying broadcast-only (postgres_changes off)`
+                );
+              }
               if (reconnectTimer) clearTimeout(reconnectTimer);
-              const delay = Math.min(30_000, 1000 * 2 ** Math.min(reconnectAttempt, 5));
-              reconnectAttempt += 1;
+              void supabase.removeChannel(ch);
               reconnectTimer = setTimeout(() => {
                 void fetchOnce();
                 connect();
-              }, delay);
+              }, 300);
+              return;
             }
-          });
+
+            const delay = Math.min(30_000, 1000 * 2 ** Math.min(reconnectAttempt, 5));
+            if (__DEV__) {
+              console.debug(
+                `[useTripStatus] ${state}: ${detail} · refetch + reconnect in ${delay}ms (attempt ${reconnectAttempt + 1})`
+              );
+            }
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            reconnectAttempt += 1;
+            reconnectTimer = setTimeout(() => {
+              void fetchOnce();
+              connect();
+            }, delay);
+          }
+        });
 
         if (cancelled) {
           await supabase.removeChannel(ch);
@@ -168,6 +200,15 @@ export function useTripStatus(
       void removeSupabaseChannelsForTopic(supabase, topic);
     };
   }, [tripId, enabled, applyStatus, fetchOnce]);
+
+  /** Client-side trip updates (driver arrived, PIN start) do not always hit Edge `realtimeBroadcast`; postgres_changes is often off on RN after CHANNEL_ERROR — poll DB as a safety net. */
+  useEffect(() => {
+    if (!tripId || !enabled) return;
+    const id = setInterval(() => {
+      void fetchOnce();
+    }, 5000);
+    return () => clearInterval(id);
+  }, [tripId, enabled, fetchOnce]);
 
   return { status, loading, error, refetch: fetchOnce };
 }

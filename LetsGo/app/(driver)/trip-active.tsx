@@ -15,6 +15,7 @@ import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { RoutePolyline } from "@/components/rider/RoutePolyline";
 import { Button } from "@/components/ui/Button";
+import { useTripStatus } from "@/hooks/useTripStatus";
 import { completeTrip } from "@/lib/driverEdge";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
 import { haversineMeters } from "@/lib/geo";
@@ -71,6 +72,15 @@ export default function TripActiveScreen() {
       return;
     }
     const t = data as TripFull;
+    if (t.status === "cancelled" || t.status === "no_driver_found") {
+      setLoading(false);
+      Alert.alert(
+        "Trip ended",
+        t.status === "cancelled" ? "This trip was cancelled." : "This trip is no longer active."
+      );
+      router.replace("/(driver)/(tabs)/home" as Href);
+      return;
+    }
     setTrip(t);
     if (t.status === "in_progress") {
       setPinOk(true);
@@ -87,11 +97,26 @@ export default function TripActiveScreen() {
       .maybeSingle();
     setRiderName(prof?.full_name ?? "Rider");
     setLoading(false);
-  }, [tripId]);
+  }, [tripId, router]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useTripStatus(tripId, {
+    enabled: Boolean(tripId),
+    onStatusChange: (next) => {
+      if (next === "cancelled" || next === "no_driver_found") {
+        Alert.alert(
+          "Trip ended",
+          next === "cancelled" ? "This trip was cancelled." : "This trip is no longer active."
+        );
+        router.replace("/(driver)/(tabs)/home" as Href);
+        return;
+      }
+      void load();
+    },
+  });
 
   useEffect(() => {
     if (!pinOk || !trip) return;
@@ -269,6 +294,10 @@ export default function TripActiveScreen() {
                 />
               </View>
             </>
+          ) : trip.status === "driver_accepted" ? (
+            <Text className="font-inter px-4 text-center text-textSecondary">
+              This trip is still marked as heading to pickup. Go back and open the pickup screen, or return home.
+            </Text>
           ) : (
             <Text className="font-inter text-textSecondary">Loading map…</Text>
           )}
@@ -311,7 +340,7 @@ export default function TripActiveScreen() {
           </Text>
           <Text className="font-inter mt-2 text-xs text-textSecondary">
             {DEV_END_TRIP_WITHOUT_DROP_OFF && !nearDropoff && trip?.status === "in_progress"
-              ? "[Dev] End Trip works without driving to drop-off. Set EXPO_PUBLIC_DEV_END_TRIP_ANYWHERE=false to require 300 m."
+              ? "[Test] End Trip allowed without driving to drop-off. Set EXPO_PUBLIC_DEV_END_TRIP_ANYWHERE=false to require 300 m in dev."
               : nearDropoff
                 ? "Within 300 m of drop-off — you can end the trip."
                 : `~${Math.round(distDrop)} m to drop-off.`}

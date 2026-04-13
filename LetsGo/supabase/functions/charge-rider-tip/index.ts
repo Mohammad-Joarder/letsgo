@@ -57,7 +57,7 @@ Deno.serve(async (req) => {
 
     const { data: trip, error: tErr } = await admin
       .from("trips")
-      .select("id, rider_id, driver_id, status")
+      .select("id, rider_id, driver_id, status, stripe_payment_intent_id, payment_method")
       .eq("id", body.trip_id)
       .single();
     if (tErr || !trip || trip.rider_id !== user.id) {
@@ -104,11 +104,32 @@ Deno.serve(async (req) => {
         ? (def as { id: string }).id
         : undefined;
     }
+    /** Booking often uses a card without setting `invoice_settings.default_payment_method` — reuse the trip PI's PM. */
+    if (!pmId && trip.stripe_payment_intent_id) {
+      try {
+        const orig = await stripe.paymentIntents.retrieve(String(trip.stripe_payment_intent_id));
+        const pm = orig.payment_method;
+        pmId =
+          typeof pm === "string"
+            ? pm
+            : pm && typeof pm === "object" && "id" in pm
+              ? (pm as { id: string }).id
+              : undefined;
+      } catch {
+        /* fall through to error below */
+      }
+    }
     if (!pmId) {
-      return new Response(JSON.stringify({ ok: false, error: "No default payment method" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error:
+            trip.payment_method === "cash"
+              ? "Tips for cash trips are not charged to a card in this flow."
+              : "No saved card for this tip. Open Payment methods and set a default card, or re-book with a card that stays on file.",
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     const pi = await stripe.paymentIntents.create({

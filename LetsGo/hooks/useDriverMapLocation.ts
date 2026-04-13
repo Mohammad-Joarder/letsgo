@@ -2,12 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type MapView from "react-native-maps";
 import type { Region } from "react-native-maps";
 
-import { latLngToRegion, startDriverLocationService } from "@/lib/location";
+import { getDriverCurrentPosition, latLngToRegion, startDriverLocationService } from "@/lib/location";
 
-const INITIAL_REGION = latLngToRegion(-33.8688, 151.2093, {
-  latitudeDelta: 0.06,
-  longitudeDelta: 0.06,
-});
+const DEFAULT_DELTA = { latitudeDelta: 0.06, longitudeDelta: 0.06 };
 
 export type UseDriverMapLocationParams = {
   /** When true, watch position and push to `update-driver-location` (throttled). */
@@ -18,7 +15,7 @@ export type UseDriverMapLocationParams = {
 };
 
 /**
- * Driver: while `active` (online), streams GPS to map animation + Edge location updates.
+ * Driver: seeds the map from GPS (no hard-coded city), then while `active` streams to the map and Edge.
  */
 export function useDriverMapLocation({
   active,
@@ -27,12 +24,32 @@ export function useDriverMapLocation({
   exponentialBackoffOnPushFailure = false,
 }: UseDriverMapLocationParams) {
   const [coord, setCoord] = useState<{ lat: number; lng: number } | null>(null);
-  const [region, setRegion] = useState<Region>(INITIAL_REGION);
+  const [region, setRegion] = useState<Region | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
-  const deltaRef = useRef({
-    latitudeDelta: INITIAL_REGION.latitudeDelta,
-    longitudeDelta: INITIAL_REGION.longitudeDelta,
-  });
+  const deltaRef = useRef(DEFAULT_DELTA);
+  const hasSeededMapRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const p = await getDriverCurrentPosition();
+      if (cancelled || !p) return;
+      setCoord({ lat: p.lat, lng: p.lng });
+      const next = latLngToRegion(p.lat, p.lng, DEFAULT_DELTA);
+      deltaRef.current = {
+        latitudeDelta: next.latitudeDelta,
+        longitudeDelta: next.longitudeDelta,
+      };
+      setRegion(next);
+      if (!hasSeededMapRef.current) {
+        hasSeededMapRef.current = true;
+        mapRef.current?.animateToRegion(next, 400);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mapRef]);
 
   const onRegionChangeComplete = useCallback((r: Region) => {
     deltaRef.current = { latitudeDelta: r.latitudeDelta, longitudeDelta: r.longitudeDelta };
@@ -76,6 +93,7 @@ export function useDriverMapLocation({
 
   return {
     coord,
+    /** Camera region; null until first GPS read completes. */
     region,
     onRegionChangeComplete,
     syncError,

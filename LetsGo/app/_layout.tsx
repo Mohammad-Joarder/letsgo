@@ -15,6 +15,7 @@ import { useEffect } from "react";
 import { Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { StripeProvider } from "@stripe/stripe-react-native";
+import * as WebBrowser from "expo-web-browser";
 import { AuthProvider, useAuthContext } from "@/context/AuthContext";
 import { getStripePublishableKey } from "@/lib/stripeConfig";
 
@@ -67,6 +68,10 @@ export default function RootLayout() {
     Sora_600SemiBold,
     Sora_700Bold,
   });
+
+  useEffect(() => {
+    WebBrowser.maybeCompleteAuthSession();
+  }, []);
 
   useEffect(() => {
     if (fontsLoaded) {

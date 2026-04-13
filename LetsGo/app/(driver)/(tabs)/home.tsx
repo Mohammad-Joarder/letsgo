@@ -12,15 +12,12 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { TripRequestModal } from "@/components/driver/TripRequestModal";
 import { useAuth } from "@/hooks/useAuth";
 import { useDriverMapLocation } from "@/hooks/useDriverMapLocation";
 import { useProfile } from "@/hooks/useProfile";
-import { assignDriver, updateDriverLocation } from "@/lib/driverEdge";
-import type { TripOfferPayload } from "@/lib/driverTypes";
+import { updateDriverLocation } from "@/lib/driverEdge";
 import { getCurrentPositionReliable } from "@/lib/location";
 import { mapDarkStyle } from "@/lib/mapDarkStyle";
-import { removeSupabaseChannelsForTopic } from "@/lib/realtimeChannelTeardown";
 import { supabase } from "@/lib/supabase";
 
 export default function DriverHomeScreen() {
@@ -35,15 +32,12 @@ export default function DriverHomeScreen() {
   const [todayTrips, setTodayTrips] = useState(0);
   const [todayEarnings, setTodayEarnings] = useState(0);
   const [rating, setRating] = useState<number | null>(null);
-  const [offer, setOffer] = useState<TripOfferPayload | null>(null);
-  const [offerVisible, setOfferVisible] = useState(false);
-  const [assignLoading, setAssignLoading] = useState(false);
   const [locError, setLocError] = useState<string | null>(null);
   const [tabFocused, setTabFocused] = useState(true);
-  const [driverStatus, setDriverStatus] = useState<string | null>(null);
 
   const { coord, region, onRegionChangeComplete, syncError } = useDriverMapLocation({
-    active: isOnline && tabFocused && driverStatus !== "on_trip",
+    /** Keep streaming on Home whenever online; stack screens (pickup / active trip) run their own GPS. */
+    active: isOnline && tabFocused,
     mapRef,
     serverPushIntervalMs: 5000,
     exponentialBackoffOnPushFailure: true,
@@ -76,7 +70,6 @@ export default function DriverHomeScreen() {
       .maybeSingle();
     if (!error && data) {
       setIsOnline(Boolean(data.is_online) && data.current_status !== "offline");
-      setDriverStatus(data.current_status ?? null);
       setRating(data.rating != null ? Number(data.rating) : null);
     }
     setDriverRowLoading(false);
@@ -107,23 +100,6 @@ export default function DriverHomeScreen() {
     }, [loadDriverRow, loadTodayStats])
   );
 
-  useEffect(() => {
-    if (!isOnline || !user?.id) return undefined;
-    const tick = () => {
-      void (async () => {
-        const { data } = await supabase
-          .from("drivers")
-          .select("current_status")
-          .eq("id", user.id)
-          .maybeSingle();
-        if (data?.current_status) setDriverStatus(data.current_status);
-      })();
-    };
-    tick();
-    const id = setInterval(tick, 2500);
-    return () => clearInterval(id);
-  }, [isOnline, user?.id]);
-
   const resumeActiveTrip = useCallback(async () => {
     if (!user?.id) return;
     const { data } = await supabase
@@ -147,93 +123,6 @@ export default function DriverHomeScreen() {
       void resumeActiveTrip();
     }, [resumeActiveTrip])
   );
-
-  useEffect(() => {
-    if (!user?.id) return undefined;
-
-    const uid = user.id;
-    const topic = `driver_trip_offers:${uid}`;
-    let cancelled = false;
-
-    async function buildOfferFromTripRow(row: Record<string, unknown>): Promise<TripOfferPayload | null> {
-      const tripId = row.id as string;
-      const riderId = row.rider_id as string;
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("full_name, is_verified")
-        .eq("id", riderId)
-        .maybeSingle();
-      const { data: rid } = await supabase.from("riders").select("rating").eq("id", riderId).maybeSingle();
-      const gross = row.estimated_fare != null ? Number(row.estimated_fare) : 0;
-      const fee = row.platform_fee != null ? Number(row.platform_fee) : 0;
-      return {
-        trip_id: tripId,
-        ride_type: String(row.ride_type),
-        pickup_address: String(row.pickup_address),
-        dropoff_address: String(row.dropoff_address),
-        pickup_lat: Number(row.pickup_lat),
-        pickup_lng: Number(row.pickup_lng),
-        dropoff_lat: Number(row.dropoff_lat),
-        dropoff_lng: Number(row.dropoff_lng),
-        estimated_fare: row.estimated_fare != null ? Number(row.estimated_fare) : null,
-        estimated_distance_km: row.estimated_distance_km != null ? Number(row.estimated_distance_km) : null,
-        estimated_duration_min: row.estimated_duration_min != null ? Number(row.estimated_duration_min) : null,
-        platform_fee: row.platform_fee != null ? Number(row.platform_fee) : null,
-        estimated_net_earnings: Math.max(0, gross - fee),
-        rider_name: prof?.full_name ?? "Rider",
-        rider_rating: rid?.rating != null ? Number(rid.rating) : 5,
-        rider_verified: Boolean(prof?.is_verified),
-        offer_expires_at: String(row.offer_expires_at ?? new Date(Date.now() + 15_000).toISOString()),
-      };
-    }
-
-    async function setup() {
-      await removeSupabaseChannelsForTopic(supabase, topic);
-      if (cancelled) return;
-
-      const ch = supabase
-        .channel(topic)
-        .on("broadcast", { event: "offer" }, ({ payload }) => {
-          const p = payload as TripOfferPayload;
-          if (p?.trip_id) {
-            setOffer(p);
-            setOfferVisible(true);
-          }
-        })
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "trips",
-            filter: `offer_driver_id=eq.${uid}`,
-          },
-          (payload) => {
-            void (async () => {
-              const row = payload.new as Record<string, unknown>;
-              if (row.status !== "searching") return;
-              const built = await buildOfferFromTripRow(row);
-              if (built) {
-                setOffer(built);
-                setOfferVisible(true);
-              }
-            })();
-          }
-        )
-        .subscribe();
-
-      if (cancelled) {
-        await supabase.removeChannel(ch);
-      }
-    }
-
-    void setup();
-
-    return () => {
-      cancelled = true;
-      void removeSupabaseChannelsForTopic(supabase, topic);
-    };
-  }, [user?.id]);
 
   async function onToggleOnline(next: boolean) {
     if (!user?.id) return;
@@ -291,60 +180,33 @@ export default function DriverHomeScreen() {
     }
   }
 
-  async function onAcceptOffer() {
-    if (!offer) return;
-    setAssignLoading(true);
-    try {
-      const res = await assignDriver({ trip_id: offer.trip_id, action: "accept" });
-      if (!res.ok) throw new Error(res.error ?? "Accept failed");
-      setOfferVisible(false);
-      setOffer(null);
-      router.push(`/(driver)/pickup-navigation?tripId=${offer.trip_id}` as Href);
-    } catch (e) {
-      Alert.alert("Accept failed", e instanceof Error ? e.message : "Try again.");
-    } finally {
-      setAssignLoading(false);
-    }
-  }
-
-  async function onDeclineOffer() {
-    if (!offer) {
-      setOfferVisible(false);
-      return;
-    }
-    const tripId = offer.trip_id;
-    setAssignLoading(true);
-    try {
-      await assignDriver({ trip_id: tripId, action: "reject" });
-    } catch {
-      /* still close */
-    } finally {
-      setAssignLoading(false);
-      setOfferVisible(false);
-      setOffer(null);
-    }
-  }
-
   const mapReady = Platform.OS !== "web";
 
   return (
     <View className="flex-1 bg-background">
       {mapReady ? (
-        <MapView
-          ref={mapRef}
-          style={{ flex: 1 }}
-          provider={PROVIDER_GOOGLE}
-          customMapStyle={mapDarkStyle}
-          initialRegion={region}
-          showsUserLocation={false}
-          onRegionChangeComplete={onRegionChangeComplete}
-        >
-          {coord ? (
-            <Marker coordinate={{ latitude: coord.lat, longitude: coord.lng }} title="You">
-              <View className="h-4 w-4 rounded-full border-2 border-white bg-primary" />
-            </Marker>
-          ) : null}
-        </MapView>
+        region ? (
+          <MapView
+            ref={mapRef}
+            style={{ flex: 1 }}
+            provider={PROVIDER_GOOGLE}
+            customMapStyle={mapDarkStyle}
+            initialRegion={region}
+            showsUserLocation={false}
+            onRegionChangeComplete={onRegionChangeComplete}
+          >
+            {coord ? (
+              <Marker coordinate={{ latitude: coord.lat, longitude: coord.lng }} title="You">
+                <View className="h-4 w-4 rounded-full border-2 border-white bg-primary" />
+              </Marker>
+            ) : null}
+          </MapView>
+        ) : (
+          <View className="flex-1 items-center justify-center bg-background">
+            <ActivityIndicator size="large" color="#00D4AA" />
+            <Text className="font-inter mt-3 text-sm text-textSecondary">Finding your location…</Text>
+          </View>
+        )
       ) : (
         <View className="flex-1 items-center justify-center bg-surface px-6">
           <Text className="font-inter text-center text-textSecondary">Map runs on iOS and Android.</Text>
@@ -405,14 +267,6 @@ export default function DriverHomeScreen() {
           </View>
         </View>
       ) : null}
-
-      <TripRequestModal
-        visible={offerVisible}
-        offer={offer}
-        loading={assignLoading}
-        onAccept={() => void onAcceptOffer()}
-        onDecline={() => void onDeclineOffer()}
-      />
     </View>
   );
 }

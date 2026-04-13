@@ -15,31 +15,50 @@ type Props = {
   onDecline: () => void;
 };
 
+/**
+ * Stable identity for the countdown effect: parent may pass a new `offer` object reference
+ * for the same trip (hydration), which must not reset the 15s timer.
+ */
+function offerTimerKey(offer: TripOfferPayload | null): string | null {
+  if (!offer?.trip_id) return null;
+  return `${offer.trip_id}:${offer.offer_expires_at}`;
+}
+
 export function TripRequestModal({ visible, offer, loading, onAccept, onDecline }: Props) {
   const [secondsLeft, setSecondsLeft] = useState(15);
   const timedOutRef = useRef(false);
+  const onAcceptRef = useRef(onAccept);
+  const onDeclineRef = useRef(onDecline);
+  const offerRef = useRef(offer);
+  onAcceptRef.current = onAccept;
+  onDeclineRef.current = onDecline;
+  offerRef.current = offer;
+
+  const timerKey = offerTimerKey(offer);
 
   useEffect(() => {
-    if (!visible || !offer) {
+    if (!visible || !timerKey) {
       setSecondsLeft(15);
       timedOutRef.current = false;
       return;
     }
 
-    const expires = new Date(offer.offer_expires_at).getTime();
+    timedOutRef.current = false;
+
+    const expires = new Date(offerRef.current!.offer_expires_at).getTime();
     const tick = () => {
       const msLeft = Math.max(0, expires - Date.now());
       const s = Math.ceil(msLeft / 1000);
       setSecondsLeft(s);
       if (msLeft <= 0 && !timedOutRef.current) {
         timedOutRef.current = true;
-        onDecline();
+        onDeclineRef.current();
       }
     };
     tick();
     const id = setInterval(tick, 250);
     return () => clearInterval(id);
-  }, [visible, offer, onDecline]);
+  }, [visible, timerKey]);
 
   const rideLabel = useMemo(() => {
     if (!offer) return "";
@@ -60,7 +79,7 @@ export function TripRequestModal({ visible, offer, loading, onAccept, onDecline 
       <View className="flex-1 bg-background px-5 pt-14 pb-8">
         <View className="mb-4 flex-row items-center justify-between">
           <Text className="font-sora text-xl font-bold text-text">New trip request</Text>
-          <Pressable onPress={onDecline} hitSlop={12} disabled={loading}>
+          <Pressable onPress={() => onDeclineRef.current()} hitSlop={12} disabled={loading}>
             <Text className="font-inter text-sm text-textSecondary">Decline</Text>
           </Pressable>
         </View>
@@ -134,8 +153,8 @@ export function TripRequestModal({ visible, offer, loading, onAccept, onDecline 
         ) : null}
 
         <View className="mt-auto gap-3">
-          <Button title="ACCEPT" loading={loading} onPress={onAccept} />
-          <Pressable onPress={onDecline} disabled={loading} className="items-center py-2">
+          <Button title="ACCEPT" loading={loading} onPress={() => onAcceptRef.current()} />
+          <Pressable onPress={() => onDeclineRef.current()} disabled={loading} className="items-center py-2">
             <Text className="font-inter text-sm font-semibold text-textSecondary">DECLINE</Text>
           </Pressable>
         </View>

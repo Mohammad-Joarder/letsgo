@@ -13,6 +13,7 @@ export default function DriverLayout() {
     profileLoading,
     driverApproval,
     driverStripeConnectOnboarded,
+    driverStripeGateSuppressedUntil,
     configError,
   } = useAuth();
 
@@ -23,6 +24,8 @@ export default function DriverLayout() {
   const blockUntilProfileKnown = profileLoading && !driverGateOk;
 
   const onStripeOnboarding = (segments as string[]).includes("stripe-onboarding");
+  const stripeGateSuppressed =
+    driverStripeGateSuppressedUntil != null && Date.now() < driverStripeGateSuppressedUntil;
 
   useEffect(() => {
     if (!initialized || configError || blockUntilProfileKnown) return;
@@ -42,13 +45,12 @@ export default function DriverLayout() {
       return;
     }
 
-    if (driverStripeConnectOnboarded === false && !onStripeOnboarding) {
+    if (driverStripeConnectOnboarded === false && !onStripeOnboarding && !stripeGateSuppressed) {
       router.replace("/(driver)/stripe-onboarding" as Href);
       return;
     }
-    if (driverStripeConnectOnboarded === true && onStripeOnboarding) {
-      router.replace("/(driver)/(tabs)/home" as Href);
-    }
+    // Do not redirect away from stripe-onboarding when already onboarded — drivers use that screen
+    // to reopen Stripe and update bank or tax details from Account.
   }, [
     initialized,
     configError,
@@ -57,6 +59,8 @@ export default function DriverLayout() {
     profile?.role,
     driverApproval,
     driverStripeConnectOnboarded,
+    driverStripeGateSuppressedUntil,
+    stripeGateSuppressed,
     onStripeOnboarding,
     segments,
     router,

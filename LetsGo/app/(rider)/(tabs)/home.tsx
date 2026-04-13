@@ -326,6 +326,12 @@ export default function RiderHomeScreen() {
       if (!res.ok || !res.trip_id) {
         throw new Error(res.error ?? "Could not create trip.");
       }
+      if (res.status === "no_driver_found") {
+        setEstimateError(
+          "No drivers are available near this pickup right now. Try again in a few minutes, move the pin closer to a busy area, or check that drivers are online."
+        );
+        return;
+      }
       router.push(`/(rider)/searching?tripId=${encodeURIComponent(res.trip_id)}` as Href);
     } catch (e) {
       setEstimateError(e instanceof Error ? e.message : "Booking failed.");

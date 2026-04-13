@@ -8,6 +8,17 @@ const corsHeaders: Record<string, string> = {
 
 const RIDE_TYPES = ["economy", "comfort", "premium", "xl"] as const;
 
+type NearbyDriverRow = { driver_id: string; distance_m: number; current_lat: number; current_lng: number };
+
+function normalizeNearbyRpcRows(nearby: unknown): NearbyDriverRow[] {
+  if (nearby == null) return [];
+  if (Array.isArray(nearby)) return nearby as NearbyDriverRow[];
+  if (typeof nearby === "object" && "driver_id" in (nearby as object)) {
+    return [nearby as NearbyDriverRow];
+  }
+  return [];
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -82,12 +93,7 @@ Deno.serve(async (req) => {
 
     if (error) throw error;
 
-    const rows = (data ?? []) as {
-      driver_id: string;
-      distance_m: number;
-      current_lat: number;
-      current_lng: number;
-    }[];
+    const rows = normalizeNearbyRpcRows(data);
 
     const drivers = rows.map((r) => {
       const km = r.distance_m / 1000;

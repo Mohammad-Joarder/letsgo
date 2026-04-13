@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "setup:env": "node scripts/copy-env.cjs",
+    "secrets:stripe": "node scripts/push-stripe-secrets.cjs",
     "start": "expo start",
     "start:safe": "node scripts/expo-start-no-validate.cjs",
     "android": "expo start --android",

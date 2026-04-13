@@ -1,6 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import { runInBackground } from "../_shared/background.ts";
 import { realtimeBroadcast } from "../_shared/realtime_broadcast.ts";
 import { audToCents, getStripe } from "../_shared/stripe.ts";
 
@@ -13,10 +12,27 @@ function randomPin(): string {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
+type NearbyDriverRow = { driver_id: string; distance_m: number };
+
+/**
+ * PostgREST `.rpc()` for `RETURNS TABLE` is usually an array; some paths return one row as a plain
+ * object. Treating non-arrays as "no drivers" broke dispatch (empty candidate list).
+ */
+function normalizeNearbyRpcRows(nearby: unknown): NearbyDriverRow[] {
+  if (nearby == null) return [];
+  if (Array.isArray(nearby)) return nearby as NearbyDriverRow[];
+  if (typeof nearby === "object" && "driver_id" in (nearby as object)) {
+    return [nearby as NearbyDriverRow];
+  }
+  return [];
+}
+
 const DISPATCH_RADIUS_M = 25_000;
 const MAX_CANDIDATES = 25;
 /** PostgREST has no timeout; a slow RPC would block the rider app for minutes. */
 const NEARBY_RPC_CAP_MS = 12_000;
+/** Wait for driver broadcast so the HTTP response does not return before the message is sent (avoids missed offers). */
+const OFFER_BROADCAST_WAIT_MS = 12_000;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -252,13 +268,26 @@ Deno.serve(async (req) => {
     const riderRow = riderResult.data;
     const riderRating = riderRow?.rating != null ? Number(riderRow.rating) : 5;
 
-    const rows = (nearby ?? []) as { driver_id: string; distance_m: number }[];
-    const candidateIds = rows.map((r) => r.driver_id).slice(0, MAX_CANDIDATES);
+    const rpcSucceeded = !nErr;
+    const rows = normalizeNearbyRpcRows(nearby);
+    const candidateIds = rows.map((r) => r.driver_id).filter(Boolean).slice(0, MAX_CANDIDATES);
 
     const expiresAt = new Date(Date.now() + 15_000).toISOString();
 
     if (candidateIds.length === 0) {
-      await admin.from("trips").update({ status: "no_driver_found" }).eq("id", trip.id);
+      if (rpcSucceeded) {
+        await admin.from("trips").update({ status: "no_driver_found" }).eq("id", trip.id);
+      } else {
+        await admin.from("trips").update({ status: "cancelled" }).eq("id", trip.id);
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error:
+              "Could not search for nearby drivers (network or server issue). Your booking was not started — please try again.",
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
     } else {
       const firstId = candidateIds[0];
       await admin
@@ -275,35 +304,40 @@ Deno.serve(async (req) => {
       const fee = platformFee != null ? Number(platformFee) : 0;
       const estNet = Math.max(0, gross - fee);
 
-      runInBackground(
-        realtimeBroadcast(supabaseUrl, serviceKey, `driver_trip_offers:${firstId}`, "offer", {
-          trip_id: trip.id,
-          ride_type: rideType,
-          pickup_address: pickupAddress,
-          dropoff_address: dropoffAddress,
-          pickup_lat: pickupLat,
-          pickup_lng: pickupLng,
-          dropoff_lat: dropoffLat,
-          dropoff_lng: dropoffLng,
-          estimated_fare: estFare,
-          estimated_distance_km: estKm,
-          estimated_duration_min: estMin,
-          platform_fee: platformFee,
-          estimated_net_earnings: estNet,
-          rider_name: profile.full_name ?? "Rider",
-          rider_rating: riderRating,
-          rider_verified: Boolean(profile.is_verified),
-          offer_expires_at: expiresAt,
-        })
-      );
+      const offerPayload = {
+        trip_id: trip.id,
+        ride_type: rideType,
+        pickup_address: pickupAddress,
+        dropoff_address: dropoffAddress,
+        pickup_lat: pickupLat,
+        pickup_lng: pickupLng,
+        dropoff_lat: dropoffLat,
+        dropoff_lng: dropoffLng,
+        estimated_fare: estFare,
+        estimated_distance_km: estKm,
+        estimated_duration_min: estMin,
+        platform_fee: platformFee,
+        estimated_net_earnings: estNet,
+        rider_name: profile.full_name ?? "Rider",
+        rider_rating: riderRating,
+        rider_verified: Boolean(profile.is_verified),
+        offer_expires_at: expiresAt,
+      };
+
+      await Promise.race([
+        realtimeBroadcast(supabaseUrl, serviceKey, `driver_trip_offers:${firstId}`, "offer", offerPayload),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), OFFER_BROADCAST_WAIT_MS)),
+      ]);
     }
+
+    const responseStatus = candidateIds.length === 0 ? "no_driver_found" : trip.status;
 
     return new Response(
       JSON.stringify({
         ok: true,
         trip_id: trip.id,
         pickup_pin: trip.pickup_pin,
-        status: candidateIds.length === 0 ? "no_driver_found" : trip.status,
+        status: responseStatus,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

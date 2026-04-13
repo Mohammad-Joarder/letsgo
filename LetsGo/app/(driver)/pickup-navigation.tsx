@@ -15,6 +15,7 @@ import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { RoutePolyline } from "@/components/rider/RoutePolyline";
 import { Button } from "@/components/ui/Button";
+import { useTripStatus } from "@/hooks/useTripStatus";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
 import { haversineMeters } from "@/lib/geo";
 import { startDriverLocationService } from "@/lib/location/driverLocationService";
@@ -44,6 +45,7 @@ export default function PickupNavigationScreen() {
   const [etaMin, setEtaMin] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const mapRef = useRef<MapView>(null);
+  const cancelledNavigatedRef = useRef(false);
   const [headerCanGoBack, setHeaderCanGoBack] = useState(() => router.canGoBack());
 
   useFocusEffect(
@@ -77,6 +79,29 @@ export default function PickupNavigationScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    cancelledNavigatedRef.current = false;
+  }, [tripId]);
+
+  const { status: liveTripStatus } = useTripStatus(tripId, {
+    enabled: Boolean(tripId),
+    onStatusChange: (next) => {
+      if (next === "cancelled" || next === "no_driver_found") return;
+      void load();
+    },
+  });
+
+  useEffect(() => {
+    if (liveTripStatus !== "cancelled" && liveTripStatus !== "no_driver_found") return;
+    if (cancelledNavigatedRef.current) return;
+    cancelledNavigatedRef.current = true;
+    Alert.alert(
+      "Trip ended",
+      liveTripStatus === "cancelled" ? "The rider cancelled this trip." : "This trip is no longer active."
+    );
+    router.replace("/(driver)/(tabs)/home" as Href);
+  }, [liveTripStatus, router]);
 
   useEffect(() => {
     if (!trip) return;
@@ -132,15 +157,32 @@ export default function PickupNavigationScreen() {
     if (!tripId) return;
     setBusy(true);
     try {
-      const { error } = await supabase
+      const { data: updated, error } = await supabase
         .from("trips")
         .update({
           status: "driver_arrived",
           driver_arrived_at: new Date().toISOString(),
         })
         .eq("id", tripId)
-        .eq("status", "driver_accepted");
+        .eq("status", "driver_accepted")
+        .select("id,status")
+        .maybeSingle();
       if (error) throw error;
+      if (!updated) {
+        const { data: row } = await supabase.from("trips").select("status").eq("id", tripId).maybeSingle();
+        const st = row?.status as string | undefined;
+        if (st === "cancelled" || st === "no_driver_found") {
+          Alert.alert(
+            "Trip ended",
+            st === "cancelled" ? "The rider cancelled this trip." : "This trip is no longer active."
+          );
+          router.replace("/(driver)/(tabs)/home" as Href);
+          return;
+        }
+        Alert.alert("Could not update", "This trip is no longer waiting for you at pickup.");
+        void load();
+        return;
+      }
       router.replace(`/(driver)/trip-active?tripId=${tripId}` as Href);
     } catch (e) {
       Alert.alert("Update failed", e instanceof Error ? e.message : "Try again.");
@@ -202,9 +244,14 @@ export default function PickupNavigationScreen() {
         ) : (
           <View style={{ width: 24 }} />
         )}
-        <Text className="font-sora flex-1 text-center text-base font-semibold text-text">
-          Heading to pickup{etaMin != null ? ` — ~${etaMin} min` : ""}
-        </Text>
+        <View className="flex-1">
+          <Text className="font-sora text-center text-base font-semibold text-text">
+            Heading to pickup{etaMin != null ? ` — ~${etaMin} min` : ""}
+          </Text>
+          <Text className="font-inter mt-0.5 text-center text-[11px] text-textSecondary">
+            Your location updates automatically for the rider.
+          </Text>
+        </View>
         <View className="w-6" />
       </View>
 
