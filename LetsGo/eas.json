@@ -1,0 +1,44 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "ios": {
+        "simulator": true
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "env": {
+        "EAS_PROJECT_ID": "121440e1-7b96-4621-98b3-9c13dd04821a"
+      }
+    },
+    "production": {
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "env": {
+        "EAS_PROJECT_ID": "121440e1-7b96-4621-98b3-9c13dd04821a"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
