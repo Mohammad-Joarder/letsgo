@@ -49,16 +49,19 @@ export default function AuthGroupLayout() {
         nav("/(driver)/(tabs)/home" as Href);
         return;
       }
-      if (leaf === "driver-review-pending") {
+      if (group === "(driver)") {
         pendingHref.current = null;
         return;
       }
-      nav("/(auth)/driver-review-pending");
+      nav("/(driver)/onboarding-status" as Href);
       return;
     }
 
     if (profile?.role === "admin") {
-      if (leaf === "admin-only") {
+      const onAdminScreen =
+        segments.includes("admin-only") ||
+        segments.includes("admin-compliance");
+      if (onAdminScreen) {
         pendingHref.current = null;
         return;
       }

@@ -8,7 +8,7 @@ export type AppLogoProps = {
 };
 
 /** Full brand lockup (LG mark + “Let’s Go” + tagline in artwork). */
-export function AppLogo({ width = 160, height = 56, style }: AppLogoProps) {
+export function AppLogo({ width = 160, height = 120, style }: AppLogoProps) {
   return (
     <Image
       accessibilityLabel="Let's Go logo"

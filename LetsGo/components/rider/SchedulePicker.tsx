@@ -1,7 +1,9 @@
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { useState } from "react";
-import { Modal, Platform, Pressable, Text, View } from "react-native";
+import { Platform, Text, View } from "react-native";
 import { Button } from "@/components/ui/Button";
+import { AppBottomSheetModal } from "@/components/ui/AppBottomSheetModal";
+import { useTheme } from "@/hooks/useTheme";
 
 type Props = {
   visible: boolean;
@@ -11,6 +13,7 @@ type Props = {
 };
 
 export function SchedulePicker({ visible, value, onChange, onClose }: Props) {
+  const { colorTheme } = useTheme();
   const [temp, setTemp] = useState(value ?? new Date(Date.now() + 60 * 60 * 1000));
 
   if (!visible) return null;
@@ -33,34 +36,29 @@ export function SchedulePicker({ visible, value, onChange, onClose }: Props) {
   }
 
   return (
-    <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <Pressable className="flex-1 justify-end bg-black/60" onPress={onClose}>
-        <Pressable
-          className="rounded-t-3xl border border-border bg-surface px-6 pb-10 pt-6"
-          onPress={(e) => e.stopPropagation()}
-        >
-          <Text className="font-sora text-lg font-semibold text-text">Schedule ride</Text>
-          <Text className="font-inter mt-1 text-sm text-textSecondary">
-            Choose a pickup time at least 15 minutes from now.
-          </Text>
+    <AppBottomSheetModal visible={visible} onClose={onClose} animationType="fade">
+      <View className="px-6 pb-10">
+        <Text className="font-sora text-lg font-semibold text-text">Schedule ride</Text>
+        <Text className="font-inter mt-1 text-sm text-textSecondary">
+          Choose a pickup time at least 15 minutes from now.
+        </Text>
 
-          <View className="mt-6 items-center">
-            <DateTimePicker
-              value={temp}
-              mode="datetime"
-              display={Platform.OS === "ios" ? "spinner" : "default"}
-              minimumDate={new Date(Date.now() + 15 * 60 * 1000)}
-              onChange={onPick}
-              themeVariant="dark"
-            />
-          </View>
+        <View className="mt-6 items-center">
+          <DateTimePicker
+            value={temp}
+            mode="datetime"
+            display={Platform.OS === "ios" ? "spinner" : "default"}
+            minimumDate={new Date(Date.now() + 15 * 60 * 1000)}
+            onChange={onPick}
+            themeVariant={colorTheme}
+          />
+        </View>
 
-          <View className="mt-6 gap-3">
-            <Button title="Confirm time" onPress={confirm} />
-            <Button title="Ride now instead" variant="ghost" onPress={clear} />
-          </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
+        <View className="mt-6 gap-3">
+          <Button title="Confirm time" onPress={confirm} />
+          <Button title="Ride now instead" variant="ghost" onPress={clear} />
+        </View>
+      </View>
+    </AppBottomSheetModal>
   );
 }

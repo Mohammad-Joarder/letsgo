@@ -1,19 +1,30 @@
 import { useState } from "react";
 import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 import type { RideType } from "@/lib/bookingTypes";
-import { supabase } from "@/lib/supabase";
+import { validatePromoCode } from "@/lib/riderEdge";
+import { useAuth } from "@/hooks/useAuth";
+
+export type ResolvedPromotion = {
+  id: string;
+  code: string;
+  discountLabel: string;
+  discountAmount: number;
+  finalFare: number;
+};
 
 type Props = {
   rideType: RideType;
+  /** Fare before promo (quote from fare estimate). */
   estimatedFare: number;
-  onPromotionResolved: (promo: { id: string; code: string; discountLabel: string } | null) => void;
+  onPromotionResolved: (promo: ResolvedPromotion | null) => void;
 };
 
 export function PromoCodeInput({ rideType, estimatedFare, onPromotionResolved }: Props) {
+  const { user } = useAuth();
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [applied, setApplied] = useState<{ code: string; label: string } | null>(null);
+  const [applied, setApplied] = useState<ResolvedPromotion | null>(null);
 
   async function validate() {
     const trimmed = code.trim().toUpperCase();
@@ -24,48 +35,56 @@ export function PromoCodeInput({ rideType, estimatedFare, onPromotionResolved }:
       setMessage("Enter a promo code.");
       return;
     }
+    if (!user?.id) {
+      setMessage("Sign in to use a promo code.");
+      return;
+    }
+    if (!Number.isFinite(estimatedFare) || estimatedFare <= 0) {
+      setMessage("Fare not ready — wait for the estimate.");
+      return;
+    }
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("promotions")
-        .select("*")
-        .eq("code", trimmed)
-        .eq("is_active", true)
-        .maybeSingle();
-
-      if (error) throw error;
-      if (!data) {
-        setMessage("Code not found or inactive.");
+      const res = await validatePromoCode({
+        code: trimmed,
+        rider_id: user.id,
+        trip_fare: estimatedFare,
+        ride_type: rideType,
+      });
+      if (!res || typeof res !== "object") {
+        setMessage("Unexpected response.");
         return;
       }
-
-      const now = new Date();
-      if (new Date(data.valid_from) > now || new Date(data.valid_until) < now) {
-        setMessage("This promotion is not valid right now.");
+      if (!("ok" in res) || res.ok === false) {
+        const msg =
+          (res as { error_message?: string }).error_message ??
+          (res as { error?: string }).error ??
+          "Code could not be applied.";
+        setMessage(msg);
         return;
       }
-      if (data.uses_count >= data.max_uses) {
-        setMessage("This promotion has reached its usage limit.");
+      if (!res.valid) {
+        setMessage("This code cannot be applied.");
         return;
       }
-      if (Array.isArray(data.ride_types) && data.ride_types.length > 0) {
-        if (!data.ride_types.includes(rideType)) {
-          setMessage("Not valid for this ride type.");
-          return;
-        }
-      }
-      if (estimatedFare < Number(data.min_fare)) {
-        setMessage(`Minimum fare for this code is $${Number(data.min_fare).toFixed(2)}.`);
-        return;
-      }
-
+      const discount = res.discount_amount ?? 0;
+      const finalFare = res.final_fare ?? Math.max(0, estimatedFare - discount);
       const label =
-        data.discount_type === "percent"
-          ? `${Number(data.discount_value)}% off`
-          : `$${Number(data.discount_value).toFixed(2)} off`;
+        discount > 0 && discount < estimatedFare
+          ? `$${discount.toFixed(2)} off`
+          : discount >= estimatedFare
+            ? "Free ride"
+            : "Discount";
 
-      setApplied({ code: trimmed, label });
-      onPromotionResolved({ id: data.id, code: trimmed, discountLabel: label });
+      const resolved: ResolvedPromotion = {
+        id: String(res.promo_id),
+        code: trimmed,
+        discountLabel: label,
+        discountAmount: discount,
+        finalFare,
+      };
+      setApplied(resolved);
+      onPromotionResolved(resolved);
       setMessage("Applied.");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Could not validate code.");
@@ -122,7 +141,7 @@ export function PromoCodeInput({ rideType, estimatedFare, onPromotionResolved }:
       </View>
       {applied ? (
         <Text className="font-inter mt-2 text-xs text-primary">
-          {applied.code} — {applied.label}
+          {applied.code} — {applied.discountLabel} · You pay ${applied.finalFare.toFixed(2)}
         </Text>
       ) : null}
       {message && !applied ? (

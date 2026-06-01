@@ -1,4 +1,5 @@
-import { useRouter } from "expo-router";
+import type { Href } from "expo-router";
+import { Link, useRouter } from "expo-router";
 import { Text, View } from "react-native";
 import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
 import { Button } from "@/components/ui/Button";
@@ -20,6 +21,9 @@ export default function AdminOnlyScreen() {
           Lets Go admin tools live in the web admin panel (React + Vite). Sign in there with your
           admin account to manage trips, drivers, and pricing.
         </Text>
+        <Link href={"/(auth)/admin-compliance" as Href} asChild>
+          <Button title="Driver compliance queue" variant="secondary" className="mt-6" />
+        </Link>
         <View className="mt-10">
           <Button title="Sign out" variant="secondary" onPress={onSignOut} />
         </View>

@@ -101,7 +101,12 @@ export function useDriverLocation(driverId: string | null | undefined, enabled =
         if (cancelled) return;
 
         const ch = supabase
-          .channel(topic)
+          .channel(topic, {
+            config: {
+              private: false,
+              broadcast: { ack: false, self: false },
+            },
+          })
           .on("broadcast", { event: "pos" }, ({ payload }) => {
             const p = payload as { lat?: number; lng?: number; recorded_at?: string };
             if (!Number.isFinite(p.lat) || !Number.isFinite(p.lng)) return;

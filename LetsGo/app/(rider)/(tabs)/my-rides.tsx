@@ -1,16 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator,
-  Modal,
-  Pressable,
-  ScrollView,
-  Text,
-  View,
-} from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
 import { Card } from "@/components/ui/Card";
+import { AppBottomSheetModal } from "@/components/ui/AppBottomSheetModal";
 import { useAuth } from "@/hooks/useAuth";
+import { useTheme } from "@/hooks/useTheme";
 import { supabase } from "@/lib/supabase";
 
 type TripRow = {
@@ -24,6 +19,7 @@ type TripRow = {
   trip_completed_at: string | null;
   driver_rating: number | null;
   ride_type: string;
+  scheduled_for: string | null;
 };
 
 const UPCOMING = new Set([
@@ -45,6 +41,7 @@ function statusTone(status: string) {
 
 export default function RiderMyRidesScreen() {
   const { user } = useAuth();
+  const { colors } = useTheme();
   const [tab, setTab] = useState<"upcoming" | "past">("upcoming");
   const [rows, setRows] = useState<TripRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,7 +57,7 @@ export default function RiderMyRidesScreen() {
     const { data, error: qErr } = await supabase
       .from("trips")
       .select(
-        "id, status, pickup_address, dropoff_address, estimated_fare, final_fare, created_at, trip_completed_at, driver_rating, ride_type"
+        "id, status, pickup_address, dropoff_address, estimated_fare, final_fare, created_at, trip_completed_at, driver_rating, ride_type, scheduled_for"
       )
       .eq("rider_id", user.id)
       .order("created_at", { ascending: false });
@@ -150,6 +147,20 @@ export default function RiderMyRidesScreen() {
                       {(trip.final_fare ?? trip.estimated_fare ?? 0).toFixed(2)}
                     </Text>
                   </View>
+                  {tab === "upcoming" && trip.scheduled_for && trip.status === "searching" ? (
+                    <Text className="font-inter mt-2 text-xs text-primary">
+                      Scheduled pickup {new Date(trip.scheduled_for).toLocaleString()} ·{" "}
+                      {(() => {
+                        const pickupMs = new Date(trip.scheduled_for!).getTime();
+                        const searchStart = pickupMs - 15 * 60 * 1000;
+                        const left = searchStart - Date.now();
+                        if (left <= 0) return "Driver search is active or starting.";
+                        const h = Math.floor(left / 3600000);
+                        const m = Math.floor((left % 3600000) / 60000);
+                        return `Driver search starts in ${h > 0 ? `${h}h ` : ""}${m}m`;
+                      })()}
+                    </Text>
+                  ) : null}
                   {tab === "past" && trip.driver_rating != null ? (
                     <Text className="font-inter mt-2 text-xs text-textSecondary">
                       You rated driver: {trip.driver_rating.toFixed(1)} ★
@@ -162,51 +173,45 @@ export default function RiderMyRidesScreen() {
         )}
       </View>
 
-      <Modal visible={selected != null} animationType="slide" transparent>
-        <Pressable className="flex-1 justify-end bg-black/55" onPress={() => setSelected(null)}>
-          <Pressable
-            className="max-h-[85%] rounded-t-3xl border border-border bg-surface px-6 pb-10 pt-6"
-            onPress={(e) => e.stopPropagation()}
-          >
-            {selected ? (
-              <>
-                <View className="mb-4 flex-row items-center justify-between">
-                  <Text className="font-sora text-lg font-semibold text-text">Trip details</Text>
-                  <Pressable onPress={() => setSelected(null)} hitSlop={12}>
-                    <Ionicons name="close" size={24} color="#8A94A6" />
-                  </Pressable>
-                </View>
-                <ScrollView>
-                  <DetailRow label="Status" value={statusLabel(selected.status)} />
-                  <DetailRow label="Ride type" value={selected.ride_type} />
-                  <DetailRow label="Pickup" value={selected.pickup_address} />
-                  <DetailRow label="Drop-off" value={selected.dropoff_address} />
-                  <DetailRow
-                    label="Fare"
-                    value={`$${(selected.final_fare ?? selected.estimated_fare ?? 0).toFixed(2)}`}
-                  />
-                  <DetailRow
-                    label="Booked"
-                    value={new Date(selected.created_at).toLocaleString()}
-                  />
-                  {selected.trip_completed_at ? (
-                    <DetailRow
-                      label="Completed"
-                      value={new Date(selected.trip_completed_at).toLocaleString()}
-                    />
-                  ) : null}
-                  {selected.driver_rating != null ? (
-                    <DetailRow
-                      label="Your rating (driver)"
-                      value={`${selected.driver_rating.toFixed(1)} / 5`}
-                    />
-                  ) : null}
-                </ScrollView>
-              </>
-            ) : null}
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <AppBottomSheetModal
+        visible={selected != null}
+        onClose={() => setSelected(null)}
+        sheetStyle={{ maxHeight: "85%" }}
+      >
+        {selected ? (
+          <View className="px-6 pb-10">
+            <View className="mb-4 flex-row items-center justify-between">
+              <Text className="font-sora text-lg font-semibold text-text">Trip details</Text>
+              <Pressable onPress={() => setSelected(null)} hitSlop={12}>
+                <Ionicons name="close" size={24} color={colors.textSecondary} />
+              </Pressable>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <DetailRow label="Status" value={statusLabel(selected.status)} />
+              <DetailRow label="Ride type" value={selected.ride_type} />
+              <DetailRow label="Pickup" value={selected.pickup_address} />
+              <DetailRow label="Drop-off" value={selected.dropoff_address} />
+              <DetailRow
+                label="Fare"
+                value={`$${(selected.final_fare ?? selected.estimated_fare ?? 0).toFixed(2)}`}
+              />
+              <DetailRow label="Booked" value={new Date(selected.created_at).toLocaleString()} />
+              {selected.trip_completed_at ? (
+                <DetailRow
+                  label="Completed"
+                  value={new Date(selected.trip_completed_at).toLocaleString()}
+                />
+              ) : null}
+              {selected.driver_rating != null ? (
+                <DetailRow
+                  label="Your rating (driver)"
+                  value={`${selected.driver_rating.toFixed(1)} / 5`}
+                />
+              ) : null}
+            </ScrollView>
+          </View>
+        ) : null}
+      </AppBottomSheetModal>
     </SafeAreaWrapper>
   );
 }

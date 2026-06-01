@@ -1,5 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { notifyDriverTripOfferPush } from "../_shared/notify_trip_offer_push.ts";
+import { pushToUser } from "../_shared/push_to_user.ts";
 import { realtimeBroadcast } from "../_shared/realtime_broadcast.ts";
 
 const corsHeaders: Record<string, string> = {
@@ -129,6 +131,23 @@ Deno.serve(async (req) => {
 
       if (uTrip) throw uTrip;
 
+      const { data: veh } = await admin
+        .from("vehicles")
+        .select("make, model, color, plate_number")
+        .eq("id", vehicle.id)
+        .maybeSingle();
+      const { data: dprof } = await admin.from("profiles").select("full_name").eq("id", user.id).maybeSingle();
+      const car = [veh?.color, veh?.make, veh?.model].filter(Boolean).join(" ");
+      const plate = veh?.plate_number ? String(veh.plate_number) : "";
+      const driverName = dprof?.full_name ?? "Your driver";
+      await pushToUser(admin, {
+        userId: trip.rider_id as string,
+        title: "Driver on the way",
+        body: `Your driver ${driverName} is on the way!${car ? ` ${car}` : ""}${plate ? ` · ${plate}` : ""}`,
+        type: "trip",
+        data: { trip_id: tripId, screen: "trip_awaiting_pickup" },
+      });
+
       const { error: dErr } = await admin
         .from("drivers")
         .update({ current_status: "on_trip" })
@@ -167,6 +186,14 @@ Deno.serve(async (req) => {
         status: "no_driver_found",
       });
 
+      await pushToUser(admin, {
+        userId: trip.rider_id as string,
+        title: "No drivers available",
+        body: "Sorry, no drivers available. Please try again.",
+        type: "trip",
+        data: { trip_id: tripId },
+      });
+
       return new Response(JSON.stringify({ ok: true, status: "no_driver_found" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -186,15 +213,19 @@ Deno.serve(async (req) => {
 
     const { data: riderProfile } = await admin
       .from("profiles")
-      .select("full_name, is_verified")
+      .select("full_name")
       .eq("id", trip.rider_id)
       .maybeSingle();
-    const { data: riderRow } = await admin.from("riders").select("rating").eq("id", trip.rider_id).maybeSingle();
+    const { data: riderRow } = await admin
+      .from("riders")
+      .select("rating, is_verified_id")
+      .eq("id", trip.rider_id)
+      .maybeSingle();
 
     const gross = trip.estimated_fare != null ? Number(trip.estimated_fare) : 0;
     const fee = trip.platform_fee != null ? Number(trip.platform_fee) : 0;
 
-    await realtimeBroadcast(supabaseUrl, serviceKey, `driver_trip_offers:${nextDriverId}`, "offer", {
+    const offerPayload: Record<string, unknown> = {
       trip_id: tripId,
       ride_type: trip.ride_type,
       pickup_address: trip.pickup_address,
@@ -210,9 +241,28 @@ Deno.serve(async (req) => {
       estimated_net_earnings: Math.max(0, gross - fee),
       rider_name: riderProfile?.full_name ?? "Rider",
       rider_rating: riderRow?.rating != null ? Number(riderRow.rating) : 5,
-      rider_verified: Boolean(riderProfile?.is_verified),
+      rider_verified: Boolean(riderRow?.is_verified_id),
       offer_expires_at: expiresAt,
-    });
+      scheduled_pickup_at: trip.scheduled_for ? String(trip.scheduled_for) : null,
+    };
+
+    const offerOk = await realtimeBroadcast(
+      supabaseUrl,
+      serviceKey,
+      `driver_trip_offers:${nextDriverId}`,
+      "offer",
+      offerPayload
+    );
+    if (!offerOk) {
+      console.error("assign-driver: realtime offer_next broadcast failed", { tripId, nextDriverId });
+    }
+    await notifyDriverTripOfferPush(
+      supabaseUrl,
+      serviceKey,
+      nextDriverId,
+      String(tripId),
+      String(trip.pickup_address ?? "")
+    );
 
     return new Response(JSON.stringify({ ok: true, status: "offer_next", next_driver_id: nextDriverId }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

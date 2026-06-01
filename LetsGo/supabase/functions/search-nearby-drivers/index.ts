@@ -84,11 +84,19 @@ Deno.serve(async (req) => {
 
     const radiusM = radiusKm * 1000;
 
+    const { data: prof } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    let pRiderRating = 5;
+    if (prof?.role === "rider") {
+      const { data: rr } = await supabase.from("riders").select("rating").eq("id", user.id).maybeSingle();
+      pRiderRating = rr?.rating != null ? Number(rr.rating) : 5;
+    }
+
     const { data, error } = await supabase.rpc("nearby_drivers_for_ride", {
       p_lat: lat,
       p_lng: lng,
       p_radius_m: radiusM,
       p_ride_type: rt,
+      p_rider_rating: pRiderRating,
     });
 
     if (error) throw error;

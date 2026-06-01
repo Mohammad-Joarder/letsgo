@@ -9,7 +9,7 @@ import type { TripOfferPayload } from "@/lib/driverTypes";
 import { removeSupabaseChannelsForTopic } from "@/lib/realtimeChannelTeardown";
 import { supabase } from "@/lib/supabase";
 
-const HYDRATE_POLL_MS = 4000;
+const HYDRATE_POLL_MS = 2000;
 const MAX_DEAD_OFFER_IDS = 48;
 
 /**
@@ -70,6 +70,7 @@ export function DriverTripOffersHost() {
       rider_rating: rid?.rating != null ? Number(rid.rating) : 5,
       rider_verified: Boolean(prof?.is_verified),
       offer_expires_at: String(row.offer_expires_at ?? new Date(Date.now() + 15_000).toISOString()),
+      scheduled_pickup_at: row.scheduled_for ? String(row.scheduled_for) : null,
     };
   }, []);
 
@@ -92,7 +93,7 @@ export function DriverTripOffersHost() {
           .eq("id", p.trip_id)
           .maybeSingle();
         if (error || !row) return;
-        if (row.status !== "searching" || row.offer_driver_id !== uid) return;
+        if (row.status !== "searching" || String(row.offer_driver_id) !== String(uid)) return;
 
         const shownId = activeOfferTripIdRef.current;
         if (shownId !== null && shownId !== p.trip_id) return;
@@ -153,7 +154,12 @@ export function DriverTripOffersHost() {
       if (cancelled) return;
 
       supabase
-        .channel(topic)
+        .channel(topic, {
+          config: {
+            private: false,
+            broadcast: { ack: false, self: false },
+          },
+        })
         .on("broadcast", { event: "offer" }, ({ payload }) => {
           const offerPayload = payload as TripOfferPayload;
           if (offerPayload?.trip_id) void applyOfferIfValid(offerPayload);
@@ -185,9 +191,11 @@ export function DriverTripOffersHost() {
             })();
           }
         )
-        .subscribe((status) => {
+        .subscribe((status, err) => {
           if (status === "SUBSCRIBED" && !cancelled) {
             void hydrateFromDatabase(uid);
+          } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            console.warn("[DriverTripOffersHost] Realtime channel", topic, status, err);
           }
         });
     }

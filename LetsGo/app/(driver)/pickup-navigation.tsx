@@ -14,13 +14,17 @@ import {
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { RoutePolyline } from "@/components/rider/RoutePolyline";
+import { TripSosButton } from "@/components/safety/TripSosButton";
 import { Button } from "@/components/ui/Button";
+import { TripChatModal } from "@/components/trip/TripChatModal";
+import { useAuth } from "@/hooks/useAuth";
 import { useTripStatus } from "@/hooks/useTripStatus";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
 import { haversineMeters } from "@/lib/geo";
 import { startDriverLocationService } from "@/lib/location/driverLocationService";
 import { getCurrentPositionReliable } from "@/lib/location";
-import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { useMapStyle } from "@/hooks/useMapStyle";
+import { MapFloatingCard } from "@/components/ui/MapFloatingCard";
 import { supabase } from "@/lib/supabase";
 
 type TripRow = {
@@ -33,7 +37,9 @@ type TripRow = {
 };
 
 export default function PickupNavigationScreen() {
+  const mapStyle = useMapStyle();
   const { tripId } = useLocalSearchParams<{ tripId: string }>();
+  const { user } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [trip, setTrip] = useState<TripRow | null>(null);
@@ -47,6 +53,7 @@ export default function PickupNavigationScreen() {
   const mapRef = useRef<MapView>(null);
   const cancelledNavigatedRef = useRef(false);
   const [headerCanGoBack, setHeaderCanGoBack] = useState(() => router.canGoBack());
+  const [chatOpen, setChatOpen] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -206,7 +213,7 @@ export default function PickupNavigationScreen() {
           ref={mapRef}
           style={{ flex: 1 }}
           provider={PROVIDER_GOOGLE}
-          customMapStyle={mapDarkStyle}
+          customMapStyle={mapStyle}
           initialRegion={{
             latitude: trip.pickup_lat,
             longitude: trip.pickup_lng,
@@ -228,8 +235,8 @@ export default function PickupNavigationScreen() {
         </View>
       )}
 
-      <View
-        className="absolute left-4 right-4 flex-row items-center justify-between rounded-xl border border-border bg-background/95 px-4 py-3"
+      <MapFloatingCard
+        className="absolute left-4 right-4 flex-row items-center justify-between px-4 py-3"
         style={{ top: insets.top + 8 }}
       >
         {headerCanGoBack ? (
@@ -252,8 +259,8 @@ export default function PickupNavigationScreen() {
             Your location updates automatically for the rider.
           </Text>
         </View>
-        <View className="w-6" />
-      </View>
+        <TripSosButton tripId={tripId} variant="icon" />
+      </MapFloatingCard>
 
       <View
         className="absolute left-0 right-0 border-t border-border bg-surface px-5 pb-8 pt-4"
@@ -270,7 +277,7 @@ export default function PickupNavigationScreen() {
             </Pressable>
           ) : null}
           <Pressable
-            onPress={() => Alert.alert("Messages", "In-app chat will arrive in a later phase.")}
+            onPress={() => setChatOpen(true)}
             className="flex-1 items-center rounded-xl border border-border py-3 active:opacity-80"
           >
             <Text className="font-inter text-sm font-semibold text-text">Message</Text>
@@ -291,6 +298,15 @@ export default function PickupNavigationScreen() {
           />
         </View>
       </View>
+
+      <TripChatModal
+        visible={chatOpen}
+        onClose={() => setChatOpen(false)}
+        tripId={tripId}
+        selfUserId={user?.id}
+        peerPhone={riderPhone}
+        peerLabel={riderName}
+      />
     </View>
   );
 }

@@ -15,6 +15,8 @@ export type Profile = {
   full_name: string | null;
   email: string | null;
   phone: string | null;
+  /** Set by admin or trusted backend after SMS / phone ownership verification. */
+  phone_verified_at?: string | null;
   avatar_url: string | null;
   is_active: boolean;
   is_verified: boolean;
@@ -28,3 +30,13 @@ export type DriverRow = {
   approval_status: DriverApprovalStatus;
   stripe_connect_onboarded: boolean;
 };
+
+export type DriverDocumentType =
+  | "license_front"
+  | "license_back"
+  | "vehicle_registration"
+  | "insurance"
+  | "vehicle_inspection"
+  | "profile_photo"
+  | "vehicle_photo"
+  | "driver_selfie";

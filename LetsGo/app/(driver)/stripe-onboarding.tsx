@@ -4,7 +4,7 @@ import { useRouter } from "expo-router";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Text, View } from "react-native";
+import { Alert, Platform, Text, View } from "react-native";
 import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -17,13 +17,18 @@ const STRIPE_RETURN_PATH_MARKER = "stripe-connect-return";
 
 function isStripeConnectReturnUrl(url: string | null | undefined): boolean {
   if (!url) return false;
-  if (url.includes(STRIPE_RETURN_PATH_MARKER)) return true;
-  if (url.includes("create-connect-account-return")) return true;
+  const lower = url.toLowerCase();
+  if (lower.includes(STRIPE_RETURN_PATH_MARKER)) return true;
+  if (lower.includes("stripe-connect-return")) return true;
+  if (lower.includes("create-connect-account-return")) return true;
   try {
     const u = new URL(url);
+    if (u.protocol === "letsgo:" || u.protocol === "exp:" || u.protocol === "exp+letsgo:") {
+      return true;
+    }
     if (u.hostname.endsWith(".exp.direct") || u.hostname.endsWith(".expo.dev")) return true;
   } catch {
-    /* ignore */
+    if (url.startsWith("letsgo://") || url.startsWith("exp://")) return true;
   }
   return false;
 }
@@ -80,7 +85,18 @@ export default function DriverStripeOnboardingScreen() {
       /* already dismissed */
     }
     await pullStripeConnectIntoDb();
-    await refreshProfile();
+    const { driverStripeConnectOnboarded: onboarded } = await refreshProfile();
+    if (onboarded === true) {
+      Alert.alert(
+        "Payouts connected",
+        "Your Stripe account is set up. You can request payouts from Earnings when you have a balance."
+      );
+    } else {
+      Alert.alert(
+        "Stripe updated",
+        "We synced your account. If payouts are still blocked, finish any remaining steps in Stripe, then tap “I finished onboarding — refresh”."
+      );
+    }
     goHomeAfterConnect();
   }, [refreshProfile, goHomeAfterConnect]);
 
@@ -143,9 +159,20 @@ export default function DriverStripeOnboardingScreen() {
         if (Platform.OS === "web") {
           await WebBrowser.openBrowserAsync(res.onboarding_url);
         } else {
-          const authResult = await WebBrowser.openAuthSessionAsync(res.onboarding_url, returnUrl);
+          // HTTPS return URL (Stripe requirement); Edge responds 302 → letsgo:// so the session can close.
+          const authResult = await WebBrowser.openAuthSessionAsync(
+            res.onboarding_url,
+            returnUrl,
+            { preferEphemeralSession: true }
+          );
           if (authResult.type === "success" && authResult.url && isStripeConnectReturnUrl(authResult.url)) {
             await completeStripeHandoff();
+          } else if (authResult.type === "dismiss" || authResult.type === "cancel") {
+            await pullStripeConnectIntoDb();
+            const { driverStripeConnectOnboarded: onboarded } = await refreshProfile();
+            if (onboarded === true) {
+              await completeStripeHandoff();
+            }
           }
         }
       } finally {

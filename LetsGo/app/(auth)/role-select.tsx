@@ -47,7 +47,7 @@ export default function RoleSelectScreen() {
       });
       await refreshProfile();
       if (choice === "driver") {
-        router.replace("/(auth)/driver-review-pending");
+        router.replace("/(driver)/onboarding-status" as Href);
       } else {
         router.replace("/(rider)/(tabs)/home" as Href);
       }

@@ -6,13 +6,14 @@ const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-function htmlPage(nextUrl: string): string {
+function htmlFallbackPage(nextUrl: string): string {
   const nextJson = JSON.stringify(nextUrl);
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="refresh" content="0;url=${nextUrl.replace(/"/g, "&quot;")}" />
     <title>Return to Lets Go</title>
   </head>
   <body style="font-family: system-ui, sans-serif; padding: 1.5rem; max-width: 28rem; margin: auto;">
@@ -24,17 +25,12 @@ function htmlPage(nextUrl: string): string {
         var a = document.getElementById("l");
         if (a) a.href = next;
         function go() {
-          try {
-            window.location.replace(next);
-          } catch (e1) {
-            try {
-              window.location.href = next;
-            } catch (e2) {}
+          try { window.location.replace(next); } catch (e1) {
+            try { window.location.href = next; } catch (e2) {}
           }
         }
         go();
-        setTimeout(go, 250);
-        setTimeout(go, 1200);
+        setTimeout(go, 300);
       })();
     </script>
   </body>
@@ -57,8 +53,29 @@ Deno.serve(async (req) => {
   const next =
     rawContinue && isAllowedAppContinueUrl(rawContinue) ? rawContinue : "letsgo://stripe-connect-return";
 
-  return new Response(htmlPage(next), {
+  // 302 into the app closes Expo WebBrowser auth sessions reliably; HTML-only left users stuck on this page.
+  if (req.method === "HEAD") {
+    return new Response(null, {
+      status: 302,
+      headers: { ...corsHeaders, Location: next },
+    });
+  }
+
+  const wantsHtml = reqUrl.searchParams.get("format") === "html";
+
+  if (!wantsHtml && isAllowedAppContinueUrl(next)) {
+    return new Response(null, {
+      status: 302,
+      headers: {
+        ...corsHeaders,
+        Location: next,
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
+  return new Response(htmlFallbackPage(next), {
     status: 200,
-    headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" },
+    headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
   });
 });

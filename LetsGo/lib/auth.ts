@@ -115,6 +115,15 @@ export async function signUpWithEmail(
   return data;
 }
 
+/** Resend Supabase Auth signup / confirmation email (not Firebase). */
+export async function resendSignupConfirmationEmail(email: string) {
+  const { error } = await supabase.auth.resend({
+    type: "signup",
+    email: email.trim(),
+  });
+  if (error) throw error;
+}
+
 export async function verifyEmailOtp(email: string, token: string) {
   const trimmed = token.replace(/\s/g, "");
   const tryTypes = ["signup", "email"] as const;
@@ -188,20 +197,6 @@ export async function createDriverProfile(params: {
     is_online: false,
   });
   if (driverError) throw driverError;
-
-  const { error: vehicleError } = await supabase.from("vehicles").insert({
-    driver_id: params.userId,
-    make: "Pending",
-    model: "Setup",
-    color: "—",
-    year: new Date().getFullYear(),
-    plate_number: "PENDING",
-    category: "sedan",
-    ride_type: "economy",
-    is_active: true,
-    is_approved: true,
-  });
-  if (vehicleError) throw vehicleError;
 }
 
 export async function completeRoleSelection(

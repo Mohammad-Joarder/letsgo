@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/Button";
 import type { FareEstimateOption, RideType } from "@/lib/bookingTypes";
 import { RIDE_TYPE_ORDER } from "@/lib/rideMeta";
 import { FareBreakdown } from "@/components/rider/FareBreakdown";
-import { PromoCodeInput } from "@/components/rider/PromoCodeInput";
+import { PromoCodeInput, type ResolvedPromotion } from "@/components/rider/PromoCodeInput";
 import { RideTypeCard } from "@/components/rider/RideTypeCard";
 
 type Props = {
@@ -20,7 +20,9 @@ type Props = {
   onScheduleEnabledChange: (v: boolean) => void;
   onOpenSchedule: () => void;
   scheduledLabel: string | null;
-  onPromotionResolved: (p: { id: string; code: string; discountLabel: string } | null) => void;
+  onPromotionResolved: (p: ResolvedPromotion | null) => void;
+  /** Shown on Book button; defaults to selected option fare. */
+  bookFareAmount?: number;
   booking: boolean;
   onBook: () => void;
   /** When true, Book is disabled (e.g. payment not ready). */
@@ -42,6 +44,7 @@ export function RideOptionsSheet({
   onOpenSchedule,
   scheduledLabel,
   onPromotionResolved,
+  bookFareAmount,
   booking,
   onBook,
   bookDisabled = false,
@@ -139,7 +142,7 @@ export function RideOptionsSheet({
         <Button
           title={
             selected
-              ? `Book ${selected.ride_type} — $${selected.estimated_fare.toFixed(2)}`
+              ? `Book ${selected.ride_type} — $${(bookFareAmount ?? selected.estimated_fare).toFixed(2)}`
               : "Book ride"
           }
           loading={booking}

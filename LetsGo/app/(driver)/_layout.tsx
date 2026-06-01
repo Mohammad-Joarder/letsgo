@@ -2,6 +2,18 @@ import type { Href } from "expo-router";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { useTheme } from "@/hooks/useTheme";
+
+function unapprovedDriverAllowedRoot(root: string | undefined): boolean {
+  return (
+    root === "onboarding-status" ||
+    root === "onboarding" ||
+    root === "application-rejected" ||
+    root === "suspended-notice" ||
+    root === "help" ||
+    root === "account"
+  );
+}
 
 export default function DriverLayout() {
   const router = useRouter();
@@ -16,16 +28,14 @@ export default function DriverLayout() {
     driverStripeGateSuppressedUntil,
     configError,
   } = useAuth();
+  const { colors } = useTheme();
 
-  const driverGateOk =
-    Boolean(session) &&
-    profile?.role === "driver" &&
-    driverApproval === "approved";
-  const blockUntilProfileKnown = profileLoading && !driverGateOk;
-
+  const blockUntilProfileKnown = Boolean(session) && profileLoading;
   const onStripeOnboarding = (segments as string[]).includes("stripe-onboarding");
   const stripeGateSuppressed =
     driverStripeGateSuppressedUntil != null && Date.now() < driverStripeGateSuppressedUntil;
+
+  const rootSeg = segments[1] as string | undefined;
 
   useEffect(() => {
     if (!initialized || configError || blockUntilProfileKnown) return;
@@ -36,12 +46,33 @@ export default function DriverLayout() {
       return;
     }
 
-    if (profile?.role !== "driver" || driverApproval !== "approved") {
-      const group = segments[0] as string | undefined;
-      const leaf = segments[1] as string | undefined;
-      if (group === "(auth)" && leaf === "driver-review-pending") return;
-      if (group !== "(driver)") return;
-      router.replace("/(auth)/driver-review-pending");
+    if (profile?.role !== "driver") {
+      if (segments[0] !== "(driver)") return;
+      router.replace("/(auth)");
+      return;
+    }
+
+    const ap = driverApproval;
+    if (!ap) return;
+
+    if (ap !== "approved") {
+      if (ap === "rejected" && rootSeg !== "application-rejected") {
+        router.replace("/(driver)/application-rejected" as Href);
+        return;
+      }
+      if (ap === "suspended" && rootSeg !== "suspended-notice") {
+        router.replace("/(driver)/suspended-notice" as Href);
+        return;
+      }
+      if ((ap === "pending" || ap === "under_review") && !unapprovedDriverAllowedRoot(rootSeg)) {
+        router.replace("/(driver)/onboarding-status" as Href);
+      }
+      return;
+    }
+
+    // Approved — block stragglers on onboarding shell
+    if (rootSeg === "onboarding" || rootSeg === "onboarding-status") {
+      router.replace("/(driver)/(tabs)/home" as Href);
       return;
     }
 
@@ -49,8 +80,6 @@ export default function DriverLayout() {
       router.replace("/(driver)/stripe-onboarding" as Href);
       return;
     }
-    // Do not redirect away from stripe-onboarding when already onboarded — drivers use that screen
-    // to reopen Stripe and update bank or tax details from Account.
   }, [
     initialized,
     configError,
@@ -64,13 +93,14 @@ export default function DriverLayout() {
     onStripeOnboarding,
     segments,
     router,
+    rootSeg,
   ]);
 
   if (configError || !initialized || blockUntilProfileKnown) {
     return null;
   }
 
-  if (!session || profile?.role !== "driver" || driverApproval !== "approved") {
+  if (!session || profile?.role !== "driver") {
     return null;
   }
 
@@ -78,14 +108,25 @@ export default function DriverLayout() {
     <Stack
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: "#0A0E1A" },
+        contentStyle: { backgroundColor: colors.background },
       }}
     >
+      <Stack.Screen name="onboarding-status" />
+      <Stack.Screen name="application-rejected" />
+      <Stack.Screen name="suspended-notice" />
+      <Stack.Screen name="onboarding" />
       <Stack.Screen name="stripe-onboarding" />
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="pickup-navigation" />
       <Stack.Screen name="trip-active" />
       <Stack.Screen name="trip-summary" />
+      <Stack.Screen name="help" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="account/vehicles"
+        options={{
+          headerShown: false,
+        }}
+      />
     </Stack>
   );
 }

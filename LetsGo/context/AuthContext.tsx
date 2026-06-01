@@ -178,6 +178,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [loadProfileForUser]);
 
+  useEffect(() => {
+    if (!isSupabaseConfigured || !session?.user?.id) return;
+    const uid = session.user.id;
+    const t = setTimeout(() => {
+      void import("@/lib/registerExpoPushToken").then((m) => {
+        void m.registerExpoPushTokenForUser(uid);
+      });
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [session?.user?.id]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       initialized,

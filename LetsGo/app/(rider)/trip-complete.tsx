@@ -15,18 +15,18 @@ import {
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { CompletedTripFareBreakdown } from "@/components/rider/CompletedTripFareBreakdown";
 import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
-import { StarRatingPicker } from "@/components/shared/StarRatingPicker";
+import { RatingFormBlock } from "@/components/shared/RatingModal";
 import { useStripe } from "@stripe/stripe-react-native";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/hooks/useAuth";
-import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { useMapStyle } from "@/hooks/useMapStyle";
 import { chargeRiderTip } from "@/lib/riderEdge";
+import { submitRating as postTripRating } from "@/lib/safetyEdge";
 import { isStripeConfigured } from "@/lib/stripeConfig";
 import { supabase } from "@/lib/supabase";
 
-const TAGS = ["Clean car", "Great chat", "On time", "Safe driver", "Quiet"];
-
 export default function RiderTripCompleteScreen() {
+  const mapStyle = useMapStyle();
   const router = useRouter();
   const { tripId } = useLocalSearchParams<{ tripId: string }>();
   const { user } = useAuth();
@@ -147,7 +147,7 @@ export default function RiderTripCompleteScreen() {
     setTipDollars(n);
   }
 
-  async function submitRating() {
+  async function submitCompleteAndRate() {
     if (!tripId || !user?.id || !driverId) {
       router.replace("/(rider)/(tabs)/home" as Href);
       return;
@@ -213,21 +213,14 @@ export default function RiderTripCompleteScreen() {
         .eq("rider_id", user.id);
       if (tipErr) throw tipErr;
 
-      const { error: insErr } = await supabase.from("ratings").insert({
+      const rateRes = await postTripRating({
         trip_id: tripId,
-        from_user_id: user.id,
         to_user_id: driverId,
         rating: stars,
         comment: comment.trim() || null,
         tags: selectedTags.length ? selectedTags : null,
       });
-      if (insErr) throw insErr;
-      const { error: tripErr } = await supabase
-        .from("trips")
-        .update({ driver_rating: stars })
-        .eq("id", tripId)
-        .eq("rider_id", user.id);
-      if (tripErr) throw tripErr;
+      if (!rateRes.ok) throw new Error(rateRes.error ?? "Could not submit rating");
       router.replace("/(rider)/(tabs)/home" as Href);
     } catch (e) {
       Alert.alert("Could not save", e instanceof Error ? e.message : "Try again.");
@@ -280,7 +273,7 @@ export default function RiderTripCompleteScreen() {
             <MapView
               style={{ flex: 1 }}
               provider={PROVIDER_GOOGLE}
-              customMapStyle={mapDarkStyle}
+              customMapStyle={mapStyle}
               scrollEnabled={false}
               zoomEnabled={false}
               pitchEnabled={false}
@@ -354,40 +347,25 @@ export default function RiderTripCompleteScreen() {
         <Text className="font-inter mt-8 text-sm font-semibold text-text">How was your driver?</Text>
         <Text className="font-inter mt-1 text-xs text-textSecondary">Rating required</Text>
         <View className="mt-3">
-          <StarRatingPicker value={stars} onChange={setStars} size={44} />
+          <RatingFormBlock
+            mode="rider_rates_driver"
+            showRatingLabel={false}
+            stars={stars}
+            onStarsChange={setStars}
+            selectedTags={selectedTags}
+            onToggleTag={(t) =>
+              setSelectedTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]))
+            }
+            comment={comment}
+            onCommentChange={setComment}
+          />
         </View>
-
-        <View className="mt-4 flex-row flex-wrap gap-2">
-          {TAGS.map((t) => {
-            const on = selectedTags.includes(t);
-            return (
-              <Pressable
-                key={t}
-                onPress={() =>
-                  setSelectedTags((prev) => (on ? prev.filter((x) => x !== t) : [...prev, t]))
-                }
-                className={`rounded-full border px-3 py-1.5 ${on ? "border-primary bg-primary/15" : "border-border"}`}
-              >
-                <Text className="font-inter text-xs text-text">{t}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        <TextInput
-          value={comment}
-          onChangeText={setComment}
-          placeholder="Comment (optional)"
-          placeholderTextColor="#5C6678"
-          multiline
-          className="font-inter mt-4 min-h-[80px] rounded-xl border border-border bg-surface2 p-3 text-sm text-text"
-        />
 
         <View className="mt-8 gap-3">
           <Button
             title="Submit rating & Book again"
             loading={submitting}
-            onPress={() => void submitRating()}
+            onPress={() => void submitCompleteAndRate()}
           />
         </View>
       </ScrollView>

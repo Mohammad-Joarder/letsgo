@@ -124,7 +124,14 @@ export function useTripStatus(
         await removeSupabaseChannelsForTopic(supabase, topic);
         if (cancelled) return;
 
-        let ch = supabase.channel(topic).on("broadcast", { event: "status" }, ({ payload }) => {
+        let ch = supabase
+          .channel(topic, {
+            config: {
+              private: false,
+              broadcast: { ack: false, self: false },
+            },
+          })
+          .on("broadcast", { event: "status" }, ({ payload }) => {
           const p = payload as { status?: string };
           if (p?.status) applyStatus(p.status);
         });

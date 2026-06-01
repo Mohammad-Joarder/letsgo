@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { pushToUser } from "../_shared/push_to_user.ts";
 import { realtimeBroadcast } from "../_shared/realtime_broadcast.ts";
 import { audToCents, getStripe } from "../_shared/stripe.ts";
 
@@ -14,6 +15,17 @@ function weekStartUtc(d: Date): string {
   if (day !== 1) x.setUTCDate(x.getUTCDate() - (day - 1));
   return x.toISOString().slice(0, 10);
 }
+
+type DriverTier = "standard" | "silver" | "gold" | "platinum";
+
+function tierFromMonthlyTrips(n: number): DriverTier {
+  if (n >= 100) return "platinum";
+  if (n >= 50) return "gold";
+  if (n >= 20) return "silver";
+  return "standard";
+}
+
+const TIER_RANK: Record<string, number> = { standard: 0, silver: 1, gold: 2, platinum: 3 };
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -105,7 +117,9 @@ Deno.serve(async (req) => {
 
     const { data: driverRow } = await admin
       .from("drivers")
-      .select("stripe_connect_account_id, stripe_connect_onboarded, total_trips, total_earnings")
+      .select(
+        "stripe_connect_account_id, stripe_connect_onboarded, total_trips, total_earnings, tier, tier_trips_this_period, tier_period_start"
+      )
       .eq("id", user.id)
       .single();
 
@@ -155,6 +169,24 @@ Deno.serve(async (req) => {
 
     if (uErr) throw uErr;
 
+    const riderId = trip.rider_id as string;
+    const appliedPromoId = trip.applied_promo_id as string | null;
+    if (appliedPromoId) {
+      const { error: rpErr } = await admin.from("rider_promotions").insert({
+        rider_id: riderId,
+        promotion_id: appliedPromoId,
+        trip_id: tripId,
+      });
+      if (rpErr) console.error("[complete-trip] rider_promotions", rpErr);
+      const { data: promRow } = await admin.from("promotions").select("uses_count").eq("id", appliedPromoId).maybeSingle();
+      if (promRow?.uses_count != null) {
+        await admin
+          .from("promotions")
+          .update({ uses_count: Number(promRow.uses_count) + 1 })
+          .eq("id", appliedPromoId);
+      }
+    }
+
     await admin.from("drivers").update({ current_status: "online" }).eq("id", user.id);
 
     const { data: existing } = await admin
@@ -189,16 +221,52 @@ Deno.serve(async (req) => {
     }
 
     if (driverRow) {
+      const nowDt = new Date();
+      const periodRaw = (driverRow as { tier_period_start?: string | null }).tier_period_start;
+      const periodStart = periodRaw
+        ? new Date(periodRaw.includes("T") ? periodRaw : `${periodRaw}T00:00:00.000Z`)
+        : nowDt;
+      const sameMonth =
+        periodStart.getUTCFullYear() === nowDt.getUTCFullYear() &&
+        periodStart.getUTCMonth() === nowDt.getUTCMonth();
+      let tripsThisPeriod: number;
+      let nextPeriodStart: string;
+      if (sameMonth) {
+        tripsThisPeriod = Number((driverRow as { tier_trips_this_period?: number }).tier_trips_this_period ?? 0) + 1;
+        nextPeriodStart = periodRaw ?? nowDt.toISOString().slice(0, 10);
+      } else {
+        tripsThisPeriod = 1;
+        nextPeriodStart = new Date(Date.UTC(nowDt.getUTCFullYear(), nowDt.getUTCMonth(), 1))
+          .toISOString()
+          .slice(0, 10);
+      }
+      const newTier = tierFromMonthlyTrips(tripsThisPeriod);
+      const oldTierStr = String((driverRow as { tier?: string }).tier ?? "standard");
+      const rankedOld = TIER_RANK[oldTierStr] ?? 0;
+      const rankedNew = TIER_RANK[newTier] ?? 0;
+
       await admin
         .from("drivers")
         .update({
           total_trips: Number(driverRow.total_trips) + 1,
           total_earnings: Number(driverRow.total_earnings) + net + riderTip,
+          tier: newTier,
+          tier_trips_this_period: tripsThisPeriod,
+          tier_period_start: nextPeriodStart,
         })
         .eq("id", user.id);
+
+      if (rankedNew > rankedOld) {
+        await pushToUser(admin, {
+          userId: user.id,
+          title: "Tier upgrade",
+          body: `You're now ${newTier.charAt(0).toUpperCase() + newTier.slice(1)}! Keep driving to unlock more perks.`,
+          type: "driver_tier",
+          data: { tier: newTier, trip_id: tripId },
+        });
+      }
     }
 
-    const riderId = trip.rider_id as string;
     const { data: rRow } = await admin
       .from("riders")
       .select("total_trips")
@@ -215,6 +283,14 @@ Deno.serve(async (req) => {
       trip_id: tripId,
       status: "completed",
       final_fare: finalFare,
+    });
+
+    await pushToUser(admin, {
+      userId: riderId,
+      title: "Trip complete",
+      body: `Trip complete! $${finalFare.toFixed(2)} charged. Rate your driver?`,
+      type: "trip",
+      data: { trip_id: tripId, screen: "trip_complete" },
     });
 
     return new Response(

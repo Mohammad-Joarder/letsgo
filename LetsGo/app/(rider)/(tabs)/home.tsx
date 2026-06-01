@@ -25,16 +25,22 @@ import {
   type RiderBookingPaymentHandle,
 } from "@/components/rider/RiderBookingPaymentBlock";
 import { RideOptionsSheet } from "@/components/rider/RideOptionsSheet";
+import type { ResolvedPromotion } from "@/components/rider/PromoCodeInput";
 import { RoutePolyline } from "@/components/rider/RoutePolyline";
 import { SchedulePicker } from "@/components/rider/SchedulePicker";
 import { Avatar } from "@/components/ui/Avatar";
+import { LoadingOverlay } from "@/components/ui/LoadingOverlay";
+import { MapFloatingCard } from "@/components/ui/MapFloatingCard";
 import { useAuth } from "@/hooks/useAuth";
+import { useModalChrome } from "@/hooks/useModalChrome";
+import { useTheme } from "@/hooks/useTheme";
 import { useNearbyDrivers } from "@/hooks/useNearbyDrivers";
 import { useProfile } from "@/hooks/useProfile";
 import { useRiderMapLocation } from "@/hooks/useRiderMapLocation";
+import { useUnreadNotificationCount } from "@/hooks/useUnreadNotificationCount";
 import type { FareEstimateOption, ResolvedPlace, RideType } from "@/lib/bookingTypes";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
-import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { useMapStyle } from "@/hooks/useMapStyle";
 import { createTrip, getFareEstimate } from "@/lib/riderEdge";
 import { allowCashBookingDemo, isStripeConfigured } from "@/lib/stripeConfig";
 import { supabase } from "@/lib/supabase";
@@ -42,10 +48,14 @@ import { supabase } from "@/lib/supabase";
 type Phase = "idle" | "destination" | "ride_options";
 
 export default function RiderHomeScreen() {
+  const mapStyle = useMapStyle();
+  const { colors } = useTheme();
+  const chrome = useModalChrome();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
   const { profile } = useProfile();
+  const unread = useUnreadNotificationCount(user?.id);
   const mapRef = useRef<MapView>(null);
   const sheetRef = useRef<BottomSheet>(null);
   const fareEstimateSeq = useRef(0);
@@ -101,11 +111,7 @@ export default function RiderHomeScreen() {
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduledFor, setScheduledFor] = useState<Date | null>(null);
   const [scheduleModal, setScheduleModal] = useState(false);
-  const [, setPromotion] = useState<{
-    id: string;
-    code: string;
-    discountLabel: string;
-  } | null>(null);
+  const [promotion, setPromotion] = useState<ResolvedPromotion | null>(null);
   const [booking, setBooking] = useState(false);
   const paymentRef = useRef<RiderBookingPaymentHandle>(null);
   const [payMode, setPayMode] = useState<PayMode>(() =>
@@ -138,9 +144,14 @@ export default function RiderHomeScreen() {
 
   const renderBackdrop = useCallback(
     (props: BottomSheetBackdropProps) => (
-      <BottomSheetBackdrop {...props} disappearsOnIndex={1} appearsOnIndex={2} opacity={0.45} />
+      <BottomSheetBackdrop
+        {...props}
+        disappearsOnIndex={1}
+        appearsOnIndex={2}
+        opacity={chrome.bottomSheet.backdropOpacity}
+      />
     ),
-    []
+    [chrome.bottomSheet.backdropOpacity]
   );
 
   useEffect(() => {
@@ -226,6 +237,10 @@ export default function RiderHomeScreen() {
   }, [pickup, dropoff]);
 
   useEffect(() => {
+    setPromotion(null);
+  }, [selectedRideType]);
+
+  useEffect(() => {
     if (phase === "ride_options") {
       sheetRef.current?.snapToIndex(2);
     } else if (phase === "idle") {
@@ -260,6 +275,9 @@ export default function RiderHomeScreen() {
 
   const selectedOption =
     fareOptions.find((o) => o.ride_type === selectedRideType) ?? fareOptions[0];
+
+  const baseFareAmount = selectedOption?.estimated_fare ?? 0;
+  const displayFare = promotion ? promotion.finalFare : baseFareAmount;
 
   const bookPaymentBlocked =
     phase === "ride_options" &&
@@ -310,7 +328,8 @@ export default function RiderHomeScreen() {
         dropoff_lng: dropoff.lng,
         estimated_distance_km: distanceKm ?? null,
         estimated_duration_min: durationMin ?? null,
-        estimated_fare: selectedOption.estimated_fare,
+        estimated_fare: displayFare,
+        fare_before_promo: baseFareAmount,
         surge_multiplier: surgeMultiplier,
         base_fare: selectedOption.base_fare,
         distance_fare: selectedOption.distance_fare,
@@ -320,6 +339,12 @@ export default function RiderHomeScreen() {
         scheduled_for:
           scheduleEnabled && scheduledFor ? scheduledFor.toISOString() : null,
         payment_method,
+        ...(promotion
+          ? {
+              applied_promo_id: promotion.id,
+              promo_discount_amount: promotion.discountAmount,
+            }
+          : {}),
         ...(stripe_payment_intent_id ? { stripe_payment_intent_id } : {}),
       };
       const res = await createTrip(tripPayload);
@@ -349,7 +374,7 @@ export default function RiderHomeScreen() {
           ref={mapRef}
           style={{ flex: 1 }}
           provider={PROVIDER_GOOGLE}
-          customMapStyle={mapDarkStyle}
+          customMapStyle={mapStyle}
           initialRegion={region}
           onRegionChangeComplete={setRegion}
           showsUserLocation={false}
@@ -418,13 +443,30 @@ export default function RiderHomeScreen() {
         style={{ top: insets.top + 8 }}
         pointerEvents="box-none"
       >
-        <View className="max-w-[70%] rounded-2xl border border-border/60 bg-background/85 px-4 py-3 backdrop-blur">
+        <MapFloatingCard className="max-w-[70%] px-4 py-3">
           <Text className="font-inter text-xs text-textSecondary">Hello,</Text>
           <Text className="font-sora text-lg font-semibold text-text" numberOfLines={1}>
             {profile?.full_name ?? "Rider"}
           </Text>
+        </MapFloatingCard>
+        <View className="flex-row items-center gap-2">
+          <Pressable
+            onPress={() => router.push("/(rider)/(tabs)/notifications")}
+            className="relative"
+          >
+            <MapFloatingCard className="h-12 w-12 items-center justify-center">
+            <Ionicons name="notifications-outline" size={22} color={colors.text} />
+            </MapFloatingCard>
+            {unread > 0 ? (
+              <View className="absolute -right-0.5 -top-0.5 min-h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1">
+                <Text className="font-inter text-[10px] font-bold text-white">
+                  {unread > 9 ? "9+" : unread}
+                </Text>
+              </View>
+            ) : null}
+          </Pressable>
+          <Avatar uri={profile?.avatar_url} name={profile?.full_name} size={48} />
         </View>
-        <Avatar uri={profile?.avatar_url} name={profile?.full_name} size={48} />
       </View>
 
       {locationError ? (
@@ -437,10 +479,12 @@ export default function RiderHomeScreen() {
         <Pressable
           accessibilityLabel="Center map on my location"
           onPress={() => recenterMapToUser(mapRef)}
-          className="absolute right-4 h-12 w-12 items-center justify-center rounded-full border border-border bg-background/90 shadow-lg"
+          className="absolute right-4"
           style={{ bottom: insets.bottom + 200 }}
         >
-          <Ionicons name="locate" size={22} color="#00D4AA" />
+          <MapFloatingCard className="h-12 w-12 items-center justify-center">
+          <Ionicons name="locate" size={22} color={colors.primary} />
+          </MapFloatingCard>
         </Pressable>
       ) : null}
 
@@ -449,12 +493,8 @@ export default function RiderHomeScreen() {
         index={0}
         snapPoints={snapPoints}
         enablePanDownToClose={false}
-        backgroundStyle={{
-          backgroundColor: "rgba(19, 25, 41, 0.94)",
-          borderWidth: 1,
-          borderColor: "rgba(30, 45, 69, 0.9)",
-        }}
-        handleIndicatorStyle={{ backgroundColor: "#5C6678" }}
+        backgroundStyle={chrome.bottomSheet.backgroundStyle}
+        handleIndicatorStyle={chrome.bottomSheet.handleIndicatorStyle}
         backdropComponent={phase === "ride_options" ? renderBackdrop : undefined}
       >
         <BottomSheetScrollView
@@ -469,13 +509,13 @@ export default function RiderHomeScreen() {
                   setDestinationOpen(true);
                   setPhase("destination");
                 }}
-                className="mt-4 flex-row items-center rounded-2xl border border-border bg-surface2/90 px-4 py-4 active:opacity-90"
+                className="mt-4 flex-row items-center rounded-2xl border border-border bg-surface2 px-4 py-4 active:opacity-90"
               >
-                <Ionicons name="search" size={20} color="#8A94A6" />
+                <Ionicons name="search" size={20} color={colors.textSecondary} />
                 <Text className="font-inter ml-3 flex-1 text-base text-textSecondary">
                   Search destination
                 </Text>
-                <Ionicons name="chevron-forward" size={18} color="#5C6678" />
+                <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
               </Pressable>
               {dropoff ? (
                 <Text className="font-inter mt-3 text-xs text-textSecondary" numberOfLines={2}>
@@ -492,9 +532,9 @@ export default function RiderHomeScreen() {
                   setDestinationOpen(true);
                   setPhase("destination");
                 }}
-                className="mb-4 flex-row items-center rounded-xl border border-border/80 bg-background/50 px-3 py-2 active:opacity-80"
+                className="mb-4 flex-row items-center rounded-xl border border-border bg-surface2 px-3 py-2 active:opacity-80"
               >
-                <Ionicons name="location" size={16} color="#00D4AA" />
+                <Ionicons name="location" size={16} color={colors.primary} />
                 <Text className="font-inter ml-2 flex-1 text-xs text-textSecondary" numberOfLines={2}>
                   {pickup?.description} → {dropoff?.description}
                 </Text>
@@ -522,7 +562,7 @@ export default function RiderHomeScreen() {
                     ) : (
                       <RiderBookingPaymentBlock
                         ref={paymentRef}
-                        fareAud={selectedOption.estimated_fare}
+                        fareAud={displayFare}
                         payMode={payMode}
                         onPayModeChange={setPayMode}
                         onReadinessChange={setPaymentReady}
@@ -547,6 +587,7 @@ export default function RiderHomeScreen() {
                     onOpenSchedule={() => setScheduleModal(true)}
                     scheduledLabel={scheduledLabel}
                     onPromotionResolved={setPromotion}
+                    bookFareAmount={displayFare}
                     booking={booking}
                     bookDisabled={bookPaymentBlocked}
                     onBook={() => void onBook()}
@@ -581,14 +622,7 @@ export default function RiderHomeScreen() {
         onClose={() => setScheduleModal(false)}
       />
 
-      {booking ? (
-        <View className="absolute inset-0 items-center justify-center bg-black/50">
-          <View className="rounded-2xl bg-surface px-8 py-6">
-            <ActivityIndicator size="large" color="#00D4AA" />
-            <Text className="font-inter mt-4 text-center text-sm text-text">Booking your ride…</Text>
-          </View>
-        </View>
-      ) : null}
+      <LoadingOverlay visible={booking} message="Booking your ride…" />
     </View>
   );
 }

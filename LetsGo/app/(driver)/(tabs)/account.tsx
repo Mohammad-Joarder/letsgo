@@ -9,10 +9,13 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { ColorThemePicker } from "@/components/settings/ColorThemePicker";
 import { signOut } from "@/lib/auth";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
+import { useTheme } from "@/hooks/useTheme";
 import type { DriverApprovalStatus } from "@/lib/types";
+import { getRecordMyRideEnabled, setRecordMyRideEnabled } from "@/hooks/useDriverTripRecording";
 import { supabase } from "@/lib/supabase";
 
 const NAV_PREF_KEY = "letsgo_driver_nav_app";
@@ -38,6 +41,7 @@ export default function DriverAccountScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const { profile } = useProfile();
+  const { colors } = useTheme();
   const [signingOut, setSigningOut] = useState(false);
   const [approval, setApproval] = useState<DriverApprovalStatus>("pending");
   const [rating, setRating] = useState<number | null>(null);
@@ -49,13 +53,15 @@ export default function DriverAccountScreen() {
   const [stripePayoutsReady, setStripePayoutsReady] = useState<boolean | null>(null);
   const [reviews, setReviews] = useState<{ rating: number; comment: string | null }[]>([]);
   const [navPref, setNavPref] = useState<"google" | "waze" | "apple">("google");
+  const [minRiderRating, setMinRiderRating] = useState<number | null>(null);
+  const [recordMyRide, setRecordMyRide] = useState(false);
 
   const load = useCallback(async () => {
     if (!user?.id) return;
     const { data: d } = await supabase
       .from("drivers")
       .select(
-        "approval_status, rating, total_trips, bank_bsb, bank_account_number, stripe_connect_onboarded"
+        "approval_status, rating, total_trips, bank_bsb, bank_account_number, stripe_connect_onboarded, min_rider_rating"
       )
       .eq("id", user.id)
       .maybeSingle();
@@ -68,6 +74,8 @@ export default function DriverAccountScreen() {
       setStripePayoutsReady(
         typeof d.stripe_connect_onboarded === "boolean" ? d.stripe_connect_onboarded : null
       );
+      const mr = (d as { min_rider_rating?: number | null }).min_rider_rating;
+      setMinRiderRating(mr != null ? Number(mr) : null);
     }
     const { data: v } = await supabase
       .from("vehicles")
@@ -95,6 +103,8 @@ export default function DriverAccountScreen() {
     const pref = await AsyncStorage.getItem(NAV_PREF_KEY);
     if (pref === "waze" || pref === "apple") setNavPref(pref);
     else setNavPref("google");
+
+    setRecordMyRide(await getRecordMyRideEnabled());
   }, [user?.id]);
 
   useEffect(() => {
@@ -114,6 +124,21 @@ export default function DriverAccountScreen() {
   async function setNavPreference(p: "google" | "waze" | "apple") {
     setNavPref(p);
     await AsyncStorage.setItem(NAV_PREF_KEY, p);
+  }
+
+  async function persistMinRiderRating(v: number | null) {
+    if (!user?.id) return;
+    setMinRiderRating(v);
+    const { error } = await supabase.from("drivers").update({ min_rider_rating: v }).eq("id", user.id);
+    if (error) {
+      Alert.alert("Could not save", error.message);
+      void load();
+    }
+  }
+
+  async function toggleRecordMyRide(next: boolean) {
+    setRecordMyRide(next);
+    await setRecordMyRideEnabled(next);
   }
 
   const maskedAcct = acct && acct.length > 4 ? `••••${acct.slice(-4)}` : acct ?? "—";
@@ -157,6 +182,12 @@ export default function DriverAccountScreen() {
           ) : (
             <Text className="font-inter text-sm text-textSecondary">No active vehicle on file.</Text>
           )}
+          <Button
+            title="Manage vehicles"
+            variant="secondary"
+            className="mt-4"
+            onPress={() => router.push("/(driver)/account/vehicles" as Href)}
+          />
         </Card>
 
         <SectionTitle>Documents</SectionTitle>
@@ -218,15 +249,74 @@ export default function DriverAccountScreen() {
           )}
         </Card>
 
+        <SectionTitle>Matching</SectionTitle>
+        <Card className="p-0 px-4 py-4">
+          <Text className="font-inter text-sm font-semibold text-text">Minimum rider rating</Text>
+          <Text className="font-inter mt-1 text-xs text-textSecondary">
+            Trip requests from riders below this average rating will not be offered to you.
+          </Text>
+          <View className="mt-3 flex-row flex-wrap gap-2">
+            {(
+              [
+                [null, "None"],
+                [3.5, "3.5 ★"],
+                [4.0, "4.0 ★"],
+                [4.5, "4.5 ★"],
+              ] as const
+            ).map(([val, label]) => {
+              const on = minRiderRating === val;
+              return (
+                <Pressable
+                  key={String(val)}
+                  onPress={() => void persistMinRiderRating(val)}
+                  className={`rounded-xl border px-3 py-2 ${on ? "border-primary bg-primary/15" : "border-border"}`}
+                >
+                  <Text className="font-inter text-xs text-text">{label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </Card>
+
+        <SectionTitle>Trip recording</SectionTitle>
+        <Card className="p-0 px-4 py-4">
+          <View className="flex-row items-center justify-between">
+            <View className="flex-1 pr-3">
+              <Text className="font-inter text-sm font-semibold text-text">Record my ride</Text>
+              <Text className="font-inter mt-1 text-xs text-textSecondary">
+                Preference only for now (local audio capture is disabled in this build to avoid extra native
+                dependencies).
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => void toggleRecordMyRide(!recordMyRide)}
+              className={`h-8 w-14 rounded-full p-0.5 ${recordMyRide ? "bg-primary" : "bg-border"}`}
+            >
+              <View
+                className={`h-7 w-7 rounded-full bg-white ${recordMyRide ? "self-end" : "self-start"}`}
+              />
+            </Pressable>
+          </View>
+        </Card>
+
         <SectionTitle>Settings</SectionTitle>
-        <Card className="p-0">
+        <ColorThemePicker />
+        <Card className="mt-4 p-0">
+          <Pressable
+            className="flex-row items-center border-b border-border/60 px-4 py-4 active:bg-surface2/50"
+            onPress={() => router.push("/(driver)/help" as Href)}
+          >
+            <Ionicons name="help-circle-outline" size={20} color={colors.primary} />
+            <Text className="font-inter ml-3 flex-1 text-sm text-text">Help & support</Text>
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+          </Pressable>
           <Pressable
             className="flex-row items-center border-b border-border/60 px-4 py-4 active:bg-surface2/50"
             onPress={() => Alert.alert("Notifications", "Preference toggles ship in a later phase.")}
           >
-            <Ionicons name="notifications-outline" size={20} color="#00D4AA" />
+            <Ionicons name="notifications-outline" size={20} color={colors.primary} />
             <Text className="font-inter ml-3 flex-1 text-sm text-text">Notifications</Text>
-            <Ionicons name="chevron-forward" size={18} color="#5C6678" />
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
           </Pressable>
           <View className="px-4 py-3">
             <Text className="font-inter text-sm font-semibold text-text">Navigation app</Text>

@@ -9,25 +9,25 @@ import {
   Pressable,
   ScrollView,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { RoutePolyline } from "@/components/rider/RoutePolyline";
-import { StarRatingPicker } from "@/components/shared/StarRatingPicker";
+import { RatingFormBlock } from "@/components/shared/RatingModal";
 import { Button } from "@/components/ui/Button";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
-import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { useMapStyle } from "@/hooks/useMapStyle";
+import { submitRating as postTripRating } from "@/lib/safetyEdge";
 import { supabase } from "@/lib/supabase";
 
-const TAGS = ["On time", "Polite", "Clear directions", "Respectful", "Quiet"];
-
 export default function TripSummaryScreen() {
-  const { tripId, net, final } = useLocalSearchParams<{
+  const mapStyle = useMapStyle();
+  const { tripId, net, final, recorded } = useLocalSearchParams<{
     tripId: string;
     net?: string;
     final?: string;
+    recorded?: string;
   }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -117,15 +117,14 @@ export default function TripSummaryScreen() {
         router.replace("/(driver)/(tabs)/home" as Href);
         return;
       }
-      const { error } = await supabase.from("ratings").insert({
+      const rateRes = await postTripRating({
         trip_id: tripId,
-        from_user_id: uid,
         to_user_id: riderId,
         rating: stars,
         comment: comment.trim() || null,
         tags: selectedTags.length ? selectedTags : null,
       });
-      if (error) throw error;
+      if (!rateRes.ok) throw new Error(rateRes.error ?? "Could not submit rating");
       if (tip > 0) {
         await supabase.from("trips").update({ rider_tip: tip }).eq("id", tripId);
       }
@@ -156,7 +155,7 @@ export default function TripSummaryScreen() {
           <MapView
             style={{ flex: 1 }}
             provider={PROVIDER_GOOGLE}
-            customMapStyle={mapDarkStyle}
+            customMapStyle={mapStyle}
             initialRegion={{
               latitude: (pickup.lat + drop.lat) / 2,
               longitude: (pickup.lng + drop.lng) / 2,
@@ -209,37 +208,31 @@ export default function TripSummaryScreen() {
           </Pressable>
         </View>
 
+        {recorded === "1" ? (
+          <View className="mt-4 rounded-xl border border-border bg-surface2/80 px-3 py-3">
+            <Text className="font-inter text-sm text-text">
+              Trip recording saved to your device. For safety review only — not accessible by the Lets Go team. We
+              recommend keeping it for up to 7 days, then deleting it from your files app.
+            </Text>
+          </View>
+        ) : null}
+
         <Text className="font-inter mt-6 text-sm font-semibold text-text">Rate rider</Text>
         <Text className="font-inter mt-1 text-xs text-textSecondary">Tap 1–5 stars</Text>
         <View className="mt-3">
-          <StarRatingPicker value={stars} onChange={setStars} size={44} />
+          <RatingFormBlock
+            mode="driver_rates_rider"
+            showRatingLabel={false}
+            stars={stars}
+            onStarsChange={setStars}
+            selectedTags={selectedTags}
+            onToggleTag={(t) =>
+              setSelectedTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]))
+            }
+            comment={comment}
+            onCommentChange={setComment}
+          />
         </View>
-
-        <View className="mt-4 flex-row flex-wrap gap-2">
-          {TAGS.map((t) => {
-            const on = selectedTags.includes(t);
-            return (
-              <Pressable
-                key={t}
-                onPress={() =>
-                  setSelectedTags((prev) => (on ? prev.filter((x) => x !== t) : [...prev, t]))
-                }
-                className={`rounded-full border px-3 py-1.5 ${on ? "border-primary bg-primary/15" : "border-border"}`}
-              >
-                <Text className="font-inter text-xs text-text">{t}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        <TextInput
-          value={comment}
-          onChangeText={setComment}
-          placeholder="Comment (optional)"
-          placeholderTextColor="#5C6678"
-          multiline
-          className="font-inter mt-4 min-h-[72px] rounded-xl border border-border bg-surface2 p-3 text-sm text-text"
-        />
 
         <View className="mt-6 gap-3">
           <Button title="Submit & back to home" loading={submitting} onPress={() => void submitRating()} />

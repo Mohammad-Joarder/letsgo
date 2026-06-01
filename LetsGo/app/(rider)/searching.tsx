@@ -12,11 +12,15 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { SafeAreaWrapper } from "@/components/shared/SafeAreaWrapper";
+import { TripSosButton } from "@/components/safety/TripSosButton";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/hooks/useAuth";
 import { useNearbyDrivers } from "@/hooks/useNearbyDrivers";
 import { useTripStatus } from "@/hooks/useTripStatus";
-import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { useMapStyle } from "@/hooks/useMapStyle";
+import { useModalChrome } from "@/hooks/useModalChrome";
+import { useTheme } from "@/hooks/useTheme";
+import { MapFloatingCard } from "@/components/ui/MapFloatingCard";
 import { riderCancelTrip } from "@/lib/riderEdge";
 import { supabase } from "@/lib/supabase";
 
@@ -32,6 +36,9 @@ type TripLite = {
 };
 
 export default function SearchingScreen() {
+  const mapStyle = useMapStyle();
+  const chrome = useModalChrome();
+  const { colors } = useTheme();
   const router = useRouter();
   const { tripId } = useLocalSearchParams<{ tripId: string }>();
   const { user } = useAuth();
@@ -233,7 +240,7 @@ export default function SearchingScreen() {
               ref={mapRef}
               style={{ flex: 1 }}
               provider={PROVIDER_GOOGLE}
-              customMapStyle={mapDarkStyle}
+              customMapStyle={mapStyle}
               initialRegion={region}
               showsUserLocation={false}
             >
@@ -272,23 +279,29 @@ export default function SearchingScreen() {
           </View>
         )}
 
-        <View className="absolute left-4 right-4 top-14 flex-row items-center justify-between">
-          <Text className="font-sora-display text-xl font-bold text-white drop-shadow-md">
+        <View className="absolute left-4 right-4 top-14 flex-row items-center gap-2">
+          <Text className="font-sora-display flex-1 text-xl font-bold text-white drop-shadow-md">
             Finding your driver
           </Text>
+          <TripSosButton tripId={tripId} />
           <Pressable
             onPress={() => {
               if (router.canGoBack()) router.back();
               else router.replace("/(rider)/(tabs)/home" as Href);
             }}
             hitSlop={12}
-            className="rounded-full bg-black/40 p-2"
+            className="active:opacity-90"
           >
-            <Ionicons name="close" size={24} color="#E8ECF2" />
+            <MapFloatingCard className="p-2">
+            <Ionicons name="close" size={24} color={colors.text} />
+            </MapFloatingCard>
           </Pressable>
         </View>
 
-        <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background/95 px-6 pb-10 pt-5">
+        <View
+          className="absolute bottom-0 left-0 right-0 px-6 pb-10 pt-5"
+          style={chrome.tripDock}
+        >
           <View className="mb-4 items-center">
             <View className="mb-3 h-16 w-16 items-center justify-center rounded-full border-2 border-primary/70 bg-primary/10">
               <Animated.View

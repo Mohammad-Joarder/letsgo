@@ -1,17 +1,8 @@
 import type { ride_type } from "./types";
+import { COLORS_DARK } from "./colors";
 
-export const COLORS = {
-  primary: "#00D4AA",
-  background: "#0A0E1A",
-  surface: "#131929",
-  surface2: "#1C2438",
-  text: "#FFFFFF",
-  textSecondary: "#8A94A6",
-  accent: "#FF6B35",
-  success: "#22C55E",
-  error: "#EF4444",
-  border: "#1E2D45",
-} as const;
+/** @deprecated Prefer useTheme().colors for theme-aware values */
+export const COLORS = COLORS_DARK;
 
 export const RIDE_TYPES: {
   id: ride_type;

@@ -19,7 +19,7 @@ export function AuthBrandHeader() {
           elevation: 6,
         }}
       >
-        <AppLogo width={168} height={56} />
+        <AppLogo width={168} height={126} />
       </View>
     </View>
   );

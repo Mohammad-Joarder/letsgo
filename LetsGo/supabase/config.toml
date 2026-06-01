@@ -49,3 +49,48 @@ verify_jwt = false
 
 [functions.charge-rider-tip]
 verify_jwt = false
+
+[functions.submit-rating]
+verify_jwt = false
+
+[functions.trip-sos]
+verify_jwt = false
+
+[functions.send-push-notification]
+verify_jwt = false
+
+[functions.request-rider-id-verification]
+verify_jwt = false
+
+[functions.submit-driver-onboarding]
+verify_jwt = false
+
+[functions.validate-promo]
+verify_jwt = false
+
+[functions.dispatch-scheduled-trips]
+verify_jwt = false
+
+[functions.admin-refund-trip]
+verify_jwt = false
+
+[functions.abr-lookup-abn]
+verify_jwt = false
+
+[functions.register-driver-device]
+verify_jwt = false
+
+[functions.evaluate-driver-fraud]
+verify_jwt = false
+
+[functions.compliance-expiry-scan]
+verify_jwt = false
+
+[functions.admin-compliance-drivers]
+verify_jwt = false
+
+[functions.admin-compliance-driver-detail]
+verify_jwt = false
+
+[functions.admin-compliance-action]
+verify_jwt = false

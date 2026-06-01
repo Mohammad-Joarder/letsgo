@@ -19,6 +19,8 @@ import {
 } from "@/lib/googleGeocoding";
 import { getGoogleMapsApiKey } from "@/lib/mapsConfig";
 import { Button } from "@/components/ui/Button";
+import { useModalChrome } from "@/hooks/useModalChrome";
+import { useTheme } from "@/hooks/useTheme";
 
 const RECENT_KEY = "letsgo_recent_places_v1";
 
@@ -51,6 +53,8 @@ export function DestinationSearch({
   onConfirm,
   userLocation,
 }: Props) {
+  const { colors } = useTheme();
+  const chrome = useModalChrome();
   const [focus, setFocus] = useState<"pickup" | "dropoff">("dropoff");
   const [pickupQ, setPickupQ] = useState(initialPickup?.description ?? "");
   const [dropQ, setDropQ] = useState(initialDropoff?.description ?? "");
@@ -273,7 +277,7 @@ export function DestinationSearch({
       <SafeAreaView className="flex-1 bg-background" edges={["top", "left", "right"]}>
         <View className="flex-row items-center justify-between border-b border-border px-4 py-3">
           <Pressable onPress={onClose} hitSlop={12} className="p-2">
-            <Ionicons name="close" size={24} color="#E8ECF2" />
+            <Ionicons name="close" size={24} color={colors.textSecondary} />
           </Pressable>
           <Text className="font-sora text-base font-semibold text-text">Trip route</Text>
           <View className="w-10" />
@@ -301,7 +305,7 @@ export function DestinationSearch({
                   }}
                   onFocus={() => setFocus("pickup")}
                   placeholder="Street, city, region, or postcode"
-                  placeholderTextColor="#5C6678"
+                  placeholderTextColor={chrome.placeholderColor}
                   className={`font-inter h-12 rounded-xl border px-4 text-sm text-text ${
                     focus === "pickup" ? "border-primary" : "border-border"
                   } bg-surface2`}
@@ -320,7 +324,7 @@ export function DestinationSearch({
                   }}
                   onFocus={() => setFocus("dropoff")}
                   placeholder="Anywhere worldwide — city, country, address…"
-                  placeholderTextColor="#5C6678"
+                  placeholderTextColor={chrome.placeholderColor}
                   className={`font-inter h-12 rounded-xl border px-4 text-sm text-text ${
                     focus === "dropoff" ? "border-primary" : "border-border"
                   } bg-surface2`}
@@ -344,7 +348,7 @@ export function DestinationSearch({
                     disabled={resolving}
                     className="flex-row items-center rounded-full border border-border px-3 py-2 active:opacity-80"
                   >
-                    <Ionicons name="flag" size={16} color="#8A94A6" />
+                    <Ionicons name="flag" size={16} color={colors.textSecondary} />
                     <Text className="font-inter ml-1.5 text-xs text-textSecondary">
                       Drop-off: my location
                     </Text>

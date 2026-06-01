@@ -16,19 +16,29 @@ import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { DriverMarker } from "@/components/rider/DriverMarker";
 import { RoutePolyline } from "@/components/rider/RoutePolyline";
+import { DriverProfileSheet } from "@/components/rider/DriverProfileSheet";
+import { TripChatModal } from "@/components/trip/TripChatModal";
+import { TripSosButton } from "@/components/safety/TripSosButton";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/hooks/useAuth";
 import { useDriverLocation } from "@/hooks/useDriverLocation";
 import { useTripStatus } from "@/hooks/useTripStatus";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
 import { haversineMeters } from "@/lib/geo";
-import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { useMapStyle } from "@/hooks/useMapStyle";
+import { useModalChrome } from "@/hooks/useModalChrome";
+import { useTheme } from "@/hooks/useTheme";
+import { MapFloatingCard } from "@/components/ui/MapFloatingCard";
 import { riderCancelTrip } from "@/lib/riderEdge";
+import { shareActiveTrip } from "@/lib/shareTrip";
 import { supabase } from "@/lib/supabase";
 
 type VehicleRow = { make: string; model: string; color: string; plate_number: string };
 
 export default function TripAwaitingPickupScreen() {
+  const mapStyle = useMapStyle();
+  const { colors } = useTheme();
+  const chrome = useModalChrome();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { tripId } = useLocalSearchParams<{ tripId: string }>();
@@ -51,6 +61,8 @@ export default function TripAwaitingPickupScreen() {
   const [coords, setCoords] = useState<{ latitude: number; longitude: number }[]>([]);
   const [etaMin, setEtaMin] = useState<number | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
 
   const { location: driverLoc } = useDriverLocation(driverId, Boolean(driverId));
 
@@ -100,8 +112,8 @@ export default function TripAwaitingPickupScreen() {
     const did = data.driver_id as string | null;
     setDriverId(did);
 
-    const { data: me } = await supabase.from("profiles").select("is_verified").eq("id", user.id).maybeSingle();
-    setRiderVerified(Boolean(me?.is_verified));
+    const { data: me } = await supabase.from("riders").select("is_verified_id").eq("id", user.id).maybeSingle();
+    setRiderVerified(Boolean(me?.is_verified_id));
 
     if (did) {
       const { data: prof } = await supabase
@@ -254,7 +266,7 @@ export default function TripAwaitingPickupScreen() {
           ref={mapRef}
           style={{ flex: 1 }}
           provider={PROVIDER_GOOGLE}
-          customMapStyle={mapDarkStyle}
+          customMapStyle={mapStyle}
           initialRegion={{
             latitude: pickupLat,
             longitude: pickupLng,
@@ -281,25 +293,30 @@ export default function TripAwaitingPickupScreen() {
       )}
 
       <View
-        className="absolute left-3 right-3 flex-row items-center justify-end gap-2"
+        className="absolute left-3 right-3 flex-row items-center justify-between gap-2"
         style={{ top: insets.top + 8 }}
       >
+        <TripSosButton tripId={tripId} />
         <Pressable
-          onPress={() =>
-            Alert.alert("Emergency", "Call 000 for police, fire, or ambulance?", [
-              { text: "No", style: "cancel" },
-              { text: "Call 000", style: "destructive", onPress: () => void Linking.openURL("tel:000") },
-            ])
-          }
-          className="rounded-full border border-red-500/80 bg-red-500/20 px-3 py-2"
+          onPress={() => {
+            if (!tripId) return;
+            void shareActiveTrip(tripId, {
+              driverName: driverName || undefined,
+              pickup: pickupAddress || undefined,
+            });
+          }}
+          className="active:opacity-90"
         >
-          <Text className="font-inter text-xs font-bold text-red-400">SOS</Text>
+          <MapFloatingCard className="flex-row items-center gap-2 px-3 py-2">
+            <Ionicons name="share-outline" size={18} color={colors.text} />
+            <Text className="font-inter text-xs font-semibold text-text">Share trip</Text>
+          </MapFloatingCard>
         </Pressable>
       </View>
 
       <View
-        className="absolute left-0 right-0 rounded-t-3xl border border-border bg-background/98 px-5 pt-4 shadow-2xl"
-        style={{ bottom: 0, paddingBottom: insets.bottom + 16 }}
+        className="absolute left-0 right-0 px-5 pt-4"
+        style={[chrome.tripDock, { bottom: 0, paddingBottom: insets.bottom + 16 }]}
       >
         <View className="mb-3 h-1 w-10 self-center rounded-full bg-border" />
         <Text className="font-sora text-lg font-bold text-text">{headline}</Text>
@@ -309,14 +326,17 @@ export default function TripAwaitingPickupScreen() {
           </Text>
         ) : null}
 
-        <View className="mt-4 flex-row items-center gap-3">
+        <Pressable
+          onPress={() => driverId && setProfileOpen(true)}
+          className="mt-4 flex-row items-center gap-3 active:opacity-90"
+        >
           <View className="h-14 w-14 items-center justify-center rounded-2xl border border-border bg-surface2">
             <Ionicons name="person" size={28} color="#00D4AA" />
           </View>
           <View className="flex-1">
             <Text className="font-sora text-base font-semibold text-text">{driverName}</Text>
             <Text className="font-inter text-xs text-textSecondary">
-              {driverRating.toFixed(1)} ★ · {riderVerified ? "Verified rider" : "Rider"}
+              {driverRating.toFixed(1)} ★ · {riderVerified ? "ID verified rider" : "Rider"} · View profile
             </Text>
             {vehicle ? (
               <Text className="font-inter mt-1 text-xs text-text">
@@ -324,7 +344,9 @@ export default function TripAwaitingPickupScreen() {
               </Text>
             ) : null}
           </View>
-        </View>
+        </Pressable>
+
+        <DriverProfileSheet visible={profileOpen} onClose={() => setProfileOpen(false)} driverId={driverId} />
 
         {pickupPin ? (
           <View className="mt-4 rounded-2xl border border-primary/40 bg-primary/10 px-4 py-3">
@@ -351,7 +373,7 @@ export default function TripAwaitingPickupScreen() {
             </Pressable>
           ) : null}
           <Pressable
-            onPress={() => Alert.alert("Chat", "In-app chat arrives in Phase 9.")}
+            onPress={() => setChatOpen(true)}
             className="flex-1 items-center rounded-xl border border-border py-3 active:opacity-80"
           >
             <Text className="font-inter text-sm font-semibold text-text">Chat</Text>
@@ -362,6 +384,15 @@ export default function TripAwaitingPickupScreen() {
           <Button title="Cancel trip" variant="secondary" loading={cancelling} onPress={onCancel} />
         </View>
       </View>
+
+      <TripChatModal
+        visible={chatOpen}
+        onClose={() => setChatOpen(false)}
+        tripId={tripId}
+        selfUserId={user?.id}
+        peerPhone={driverPhone}
+        peerLabel={driverName}
+      />
     </View>
   );
 }

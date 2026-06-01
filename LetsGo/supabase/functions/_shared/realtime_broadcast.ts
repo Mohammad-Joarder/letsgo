@@ -1,13 +1,21 @@
 /** Server-side Realtime Broadcast (see https://supabase.com/docs/guides/realtime/broadcast) */
-const BROADCAST_TIMEOUT_MS = 12_000;
+/** One attempt must stay bounded: create-trip is awaited by the rider app. */
+const BROADCAST_TIMEOUT_MS = 8_000;
+const BROADCAST_RETRIES = 3;
+const BROADCAST_RETRY_DELAY_MS = 300;
 
-/** Never block trip creation on broadcast; timeout avoids hung "Booking your ride…" on the client. */
-export async function realtimeBroadcast(
+type BroadcastMessage = {
+  topic: string;
+  event: string;
+  payload: Record<string, unknown>;
+  /** Public channel must match the JS client default (`config.private: false`) or delivery fails. */
+  private: false;
+};
+
+async function postBroadcastOnce(
   supabaseUrl: string,
   serviceRoleKey: string,
-  topic: string,
-  event: string,
-  payload: Record<string, unknown>
+  message: BroadcastMessage
 ): Promise<boolean> {
   const url = `${supabaseUrl.replace(/\/$/, "")}/realtime/v1/api/broadcast`;
   const controller = new AbortController();
@@ -22,7 +30,7 @@ export async function realtimeBroadcast(
         Authorization: `Bearer ${serviceRoleKey}`,
       },
       body: JSON.stringify({
-        messages: [{ topic, event, payload }],
+        messages: [message],
       }),
     });
     if (!res.ok) {
@@ -37,4 +45,22 @@ export async function realtimeBroadcast(
   } finally {
     clearTimeout(tid);
   }
+}
+
+/** Retries: transient 429/5xx or one-off network drops on Edge should not miss the only offer broadcast. */
+export async function realtimeBroadcast(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  topic: string,
+  event: string,
+  payload: Record<string, unknown>
+): Promise<boolean> {
+  const message: BroadcastMessage = { topic, event, payload, private: false };
+  for (let attempt = 0; attempt < BROADCAST_RETRIES; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, BROADCAST_RETRY_DELAY_MS * attempt));
+    }
+    if (await postBroadcastOnce(supabaseUrl, serviceRoleKey, message)) return true;
+  }
+  return false;
 }

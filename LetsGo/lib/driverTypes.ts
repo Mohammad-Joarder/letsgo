@@ -16,4 +16,5 @@ export type TripOfferPayload = {
   rider_rating: number;
   rider_verified?: boolean;
   offer_expires_at: string;
+  scheduled_pickup_at?: string | null;
 };

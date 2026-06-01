@@ -52,6 +52,10 @@ export type CreateTripPayload = {
   estimated_distance_km?: number | null;
   estimated_duration_min?: number | null;
   estimated_fare?: number | null;
+  /** Pre-promo fare from estimate; required server-side when a promo is applied. */
+  fare_before_promo?: number | null;
+  applied_promo_id?: string | null;
+  promo_discount_amount?: number | null;
   surge_multiplier?: number;
   base_fare?: number | null;
   distance_fare?: number | null;
@@ -63,6 +67,23 @@ export type CreateTripPayload = {
   /** Required for card bookings after Stripe authorize (Phase 5). */
   stripe_payment_intent_id?: string;
 };
+
+export async function validatePromoCode(body: {
+  code: string;
+  rider_id: string;
+  trip_fare: number;
+  ride_type: RideType;
+}): Promise<{
+  ok: boolean;
+  valid?: boolean;
+  discount_amount?: number;
+  final_fare?: number;
+  promo_id?: string;
+  error_message?: string;
+  error?: string;
+}> {
+  return invoke("validate-promo", body as unknown as Record<string, unknown>);
+}
 
 export async function createPaymentIntent(body: {
   amount_cents: number;
@@ -119,6 +140,13 @@ export async function riderCancelTrip(tripId: string): Promise<{
   error?: string;
 }> {
   return invoke("rider-cancel-trip", { trip_id: tripId });
+}
+
+/** Opens an ID verification request for ops (no expo-image-picker required). */
+export async function requestRiderIdVerification(body?: {
+  note?: string;
+}): Promise<{ ok: boolean; already_verified?: boolean; error?: string }> {
+  return invoke("request-rider-id-verification", (body ?? {}) as Record<string, unknown>);
 }
 
 export async function createTrip(body: CreateTripPayload): Promise<CreateTripResponse> {

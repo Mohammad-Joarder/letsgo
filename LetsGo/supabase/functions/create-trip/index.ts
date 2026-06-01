@@ -1,6 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import { realtimeBroadcast } from "../_shared/realtime_broadcast.ts";
+import { dispatchSearchingTripToDrivers } from "../_shared/dispatch_searching_trip.ts";
+import { evaluatePromotionForTrip, type PromotionRow } from "../_shared/promo_eligibility.ts";
+import { pushToUser } from "../_shared/push_to_user.ts";
 import { audToCents, getStripe } from "../_shared/stripe.ts";
 
 const corsHeaders: Record<string, string> = {
@@ -11,28 +13,6 @@ const corsHeaders: Record<string, string> = {
 function randomPin(): string {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
-
-type NearbyDriverRow = { driver_id: string; distance_m: number };
-
-/**
- * PostgREST `.rpc()` for `RETURNS TABLE` is usually an array; some paths return one row as a plain
- * object. Treating non-arrays as "no drivers" broke dispatch (empty candidate list).
- */
-function normalizeNearbyRpcRows(nearby: unknown): NearbyDriverRow[] {
-  if (nearby == null) return [];
-  if (Array.isArray(nearby)) return nearby as NearbyDriverRow[];
-  if (typeof nearby === "object" && "driver_id" in (nearby as object)) {
-    return [nearby as NearbyDriverRow];
-  }
-  return [];
-}
-
-const DISPATCH_RADIUS_M = 25_000;
-const MAX_CANDIDATES = 25;
-/** PostgREST has no timeout; a slow RPC would block the rider app for minutes. */
-const NEARBY_RPC_CAP_MS = 12_000;
-/** Wait for driver broadcast so the HTTP response does not return before the message is sent (avoids missed offers). */
-const OFFER_BROADCAST_WAIT_MS = 12_000;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -200,137 +180,181 @@ Deno.serve(async (req) => {
       verifiedPiId = pi.id;
     }
 
-    const { data: trip, error: tErr } = await admin
-      .from("trips")
-      .insert({
-        rider_id: riderId,
-        ride_type: rideType,
-        status: "searching",
-        pickup_address: pickupAddress,
-        dropoff_address: dropoffAddress,
-        pickup_lat: pickupLat,
-        pickup_lng: pickupLng,
-        dropoff_lat: dropoffLat,
-        dropoff_lng: dropoffLng,
-        estimated_distance_km: estKm,
-        estimated_duration_min: estMin,
-        estimated_fare: estFare,
-        surge_multiplier: surgeMult,
-        base_fare: baseFare,
-        distance_fare: distanceFare,
-        time_fare: timeFare,
-        platform_fee: platformFee,
-        pickup_pin: pickupPin,
-        notes,
-        scheduled_for: scheduledFor,
-        payment_method: paymentMethod,
-        payment_status: paymentStatus,
-        stripe_payment_intent_id: verifiedPiId,
-      })
-      .select("id, status, pickup_pin")
-      .single();
+    const rawPromoId = b.applied_promo_id != null ? String(b.applied_promo_id).trim() : "";
+    const clientPromoDiscount =
+      b.promo_discount_amount != null && Number.isFinite(Number(b.promo_discount_amount))
+        ? Number(b.promo_discount_amount)
+        : 0;
 
-    if (tErr) throw tErr;
+    let appliedPromoId: string | null = null;
+    let promoDiscountAmount: number | null = null;
+    let promoCodeOut: string | null = null;
 
-    const rpcCall = admin.rpc("nearby_drivers_for_ride", {
-      p_lat: pickupLat,
-      p_lng: pickupLng,
-      p_radius_m: DISPATCH_RADIUS_M,
-      p_ride_type: rideType,
-    });
-
-    const [riderResult, nearbyPack] = await Promise.all([
-      admin.from("riders").select("rating").eq("id", riderId).maybeSingle(),
-      Promise.race([
-        rpcCall,
-        new Promise<{ data: null; error: { message: string } }>((resolve) =>
-          setTimeout(
-            () =>
-              resolve({
-                data: null,
-                error: { message: "nearby_drivers_for_ride exceeded time limit" },
-              }),
-            NEARBY_RPC_CAP_MS
-          )
-        ),
-      ]),
-    ]);
-
-    const { data: nearby, error: nErr } = nearbyPack;
-    if (nErr) {
-      console.error("nearby_drivers_for_ride", nErr.message, {
-        pickupLat,
-        pickupLng,
-        rideType,
-      });
-    }
-
-    const riderRow = riderResult.data;
-    const riderRating = riderRow?.rating != null ? Number(riderRow.rating) : 5;
-
-    const rpcSucceeded = !nErr;
-    const rows = normalizeNearbyRpcRows(nearby);
-    const candidateIds = rows.map((r) => r.driver_id).filter(Boolean).slice(0, MAX_CANDIDATES);
-
-    const expiresAt = new Date(Date.now() + 15_000).toISOString();
-
-    if (candidateIds.length === 0) {
-      if (rpcSucceeded) {
-        await admin.from("trips").update({ status: "no_driver_found" }).eq("id", trip.id);
-      } else {
-        await admin.from("trips").update({ status: "cancelled" }).eq("id", trip.id);
+    if (rawPromoId) {
+      if (!Number.isFinite(clientPromoDiscount) || clientPromoDiscount < 0) {
+        return new Response(JSON.stringify({ ok: false, error: "Invalid promo_discount_amount" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const grossFare =
+        b.fare_before_promo != null && Number.isFinite(Number(b.fare_before_promo))
+          ? Number(b.fare_before_promo)
+          : estFare != null
+            ? Number(estFare) + clientPromoDiscount
+            : NaN;
+      if (!Number.isFinite(grossFare) || grossFare <= 0) {
         return new Response(
           JSON.stringify({
             ok: false,
-            error:
-              "Could not search for nearby drivers (network or server issue). Your booking was not started — please try again.",
+            error: "Invalid fare for promo validation (send fare_before_promo or consistent estimated_fare).",
           }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-    } else {
-      const firstId = candidateIds[0];
-      await admin
-        .from("trips")
-        .update({
-          offer_candidate_ids: candidateIds,
-          offer_index: 0,
-          offer_driver_id: firstId,
-          offer_expires_at: expiresAt,
-        })
-        .eq("id", trip.id);
 
-      const gross = estFare != null ? Number(estFare) : 0;
-      const fee = platformFee != null ? Number(platformFee) : 0;
-      const estNet = Math.max(0, gross - fee);
+      const { data: prom, error: prErr } = await admin.from("promotions").select("*").eq("id", rawPromoId).maybeSingle();
+      if (prErr || !prom) {
+        return new Response(JSON.stringify({ ok: false, error: "Invalid promotion" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
 
-      const offerPayload = {
-        trip_id: trip.id,
-        ride_type: rideType,
-        pickup_address: pickupAddress,
-        dropoff_address: dropoffAddress,
-        pickup_lat: pickupLat,
-        pickup_lng: pickupLng,
-        dropoff_lat: dropoffLat,
-        dropoff_lng: dropoffLng,
-        estimated_fare: estFare,
-        estimated_distance_km: estKm,
-        estimated_duration_min: estMin,
-        platform_fee: platformFee,
-        estimated_net_earnings: estNet,
-        rider_name: profile.full_name ?? "Rider",
-        rider_rating: riderRating,
-        rider_verified: Boolean(profile.is_verified),
-        offer_expires_at: expiresAt,
-      };
+      const ev = evaluatePromotionForTrip({
+        promo: prom as unknown as PromotionRow,
+        tripFare: grossFare,
+        rideType,
+      });
+      if (!ev.ok) {
+        return new Response(JSON.stringify({ ok: false, error: ev.error_message }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (Math.abs(ev.discount_amount - clientPromoDiscount) > 0.02) {
+        return new Response(JSON.stringify({ ok: false, error: "Promotion discount mismatch" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (estFare != null && Math.abs(ev.final_fare - Number(estFare)) > 0.05) {
+        return new Response(JSON.stringify({ ok: false, error: "Fare does not match promotion" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
 
-      await Promise.race([
-        realtimeBroadcast(supabaseUrl, serviceKey, `driver_trip_offers:${firstId}`, "offer", offerPayload),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), OFFER_BROADCAST_WAIT_MS)),
-      ]);
+      const { count, error: cErr } = await admin
+        .from("rider_promotions")
+        .select("id", { count: "exact", head: true })
+        .eq("rider_id", riderId)
+        .eq("promotion_id", rawPromoId);
+      if (cErr) throw cErr;
+      const perLimit = Number((prom as { per_user_limit?: number }).per_user_limit ?? 1);
+      if ((count ?? 0) >= perLimit) {
+        return new Response(JSON.stringify({ ok: false, error: "Promotion usage limit reached for your account" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      appliedPromoId = rawPromoId;
+      promoDiscountAmount = ev.discount_amount;
+      promoCodeOut = String((prom as { code: string }).code);
+    } else if (clientPromoDiscount > 0) {
+      return new Response(JSON.stringify({ ok: false, error: "promo_discount_amount requires applied_promo_id" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    const responseStatus = candidateIds.length === 0 ? "no_driver_found" : trip.status;
+    const tripInsert: Record<string, unknown> = {
+      rider_id: riderId,
+      ride_type: rideType,
+      status: "searching",
+      pickup_address: pickupAddress,
+      dropoff_address: dropoffAddress,
+      pickup_lat: pickupLat,
+      pickup_lng: pickupLng,
+      dropoff_lat: dropoffLat,
+      dropoff_lng: dropoffLng,
+      estimated_distance_km: estKm,
+      estimated_duration_min: estMin,
+      estimated_fare: estFare,
+      surge_multiplier: surgeMult,
+      base_fare: baseFare,
+      distance_fare: distanceFare,
+      time_fare: timeFare,
+      platform_fee: platformFee,
+      pickup_pin: pickupPin,
+      notes,
+      scheduled_for: scheduledFor,
+      payment_method: paymentMethod,
+      payment_status: paymentStatus,
+      stripe_payment_intent_id: verifiedPiId,
+    };
+    if (appliedPromoId) {
+      tripInsert.applied_promo_id = appliedPromoId;
+      tripInsert.promo_discount_amount = promoDiscountAmount;
+      tripInsert.promo_code = promoCodeOut;
+    }
+
+    const { data: trip, error: tErr } = await admin.from("trips").insert(tripInsert).select("id, status, pickup_pin").single();
+
+    if (tErr) throw tErr;
+
+    if (appliedPromoId && promoDiscountAmount != null && promoDiscountAmount > 0) {
+      await pushToUser(admin, {
+        userId: riderId,
+        title: "Promo applied",
+        body: `You saved $${promoDiscountAmount.toFixed(2)} on this trip.`,
+        type: "promo",
+        data: { trip_id: trip.id, promo_id: appliedPromoId },
+      });
+    }
+
+    const scheduledMs = scheduledFor && String(scheduledFor).trim() !== "" ? new Date(scheduledFor).getTime() : NaN;
+    const hasScheduled = !Number.isNaN(scheduledMs);
+    const skipDispatch = hasScheduled && scheduledMs > Date.now() + 15 * 60 * 1000;
+
+    let responseStatus = trip.status as string;
+
+    if (!skipDispatch) {
+      const { candidateIds, rpcSucceeded } = await dispatchSearchingTripToDrivers({
+        supabaseUrl,
+        serviceKey,
+        admin,
+        tripId: trip.id,
+        riderId,
+        pickupLat,
+        pickupLng,
+        dropoffLat,
+        dropoffLng,
+        rideType,
+        pickupAddress,
+        dropoffAddress,
+        estKm,
+        estMin,
+        estFare,
+        platformFee,
+        riderName: profile.full_name ?? "Rider",
+      });
+      if (candidateIds.length === 0 && rpcSucceeded) {
+        responseStatus = "no_driver_found";
+        await pushToUser(admin, {
+          userId: riderId,
+          title: "No drivers nearby",
+          body: "Sorry, no drivers available. Please try again.",
+          type: "trip",
+          data: { trip_id: trip.id },
+        });
+      } else if (candidateIds.length > 0) {
+        responseStatus = "searching";
+      } else {
+        responseStatus = "searching";
+      }
+    }
 
     return new Response(
       JSON.stringify({

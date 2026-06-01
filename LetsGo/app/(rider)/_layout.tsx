@@ -1,11 +1,13 @@
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { useTheme } from "@/hooks/useTheme";
 
 export default function RiderLayout() {
   const router = useRouter();
   const segments = useSegments();
   const { initialized, session, profile, profileLoading, configError } = useAuth();
+  const { colors } = useTheme();
 
   // Token refresh / auth events re-run profile fetch with profileLoading=true. If we already
   // know this user is a rider, keep the stack mounted — otherwise the whole group returns null
@@ -32,7 +34,7 @@ export default function RiderLayout() {
     <Stack
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: "#0A0E1A" },
+        contentStyle: { backgroundColor: colors.background },
       }}
     >
       <Stack.Screen name="(tabs)" />
@@ -72,11 +74,12 @@ export default function RiderLayout() {
         options={{
           headerShown: true,
           title: "Payment methods",
-          headerStyle: { backgroundColor: "#0A0E1A" },
-          headerTintColor: "#FFFFFF",
+          headerStyle: { backgroundColor: colors.background },
+          headerTintColor: colors.text,
           headerTitleStyle: { fontFamily: "Inter_600SemiBold" },
         }}
       />
+      <Stack.Screen name="help" options={{ headerShown: false }} />
     </Stack>
   );
 }

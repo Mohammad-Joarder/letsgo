@@ -26,6 +26,7 @@ export const RiderBookingPaymentBlock = forwardRef<RiderBookingPaymentHandle, Pr
     const { confirmPayment } = useStripe();
     const stripeOn = isStripeConfigured();
     const cashOk = allowCashBookingDemo();
+    const cashLabel = stripeOn ? "Cash" : "Cash (dev)";
 
     const [methods, setMethods] = useState<RiderPaymentMethodRow[]>([]);
     const [defaultId, setDefaultId] = useState<string | null>(null);
@@ -128,14 +129,16 @@ export const RiderBookingPaymentBlock = forwardRef<RiderBookingPaymentHandle, Pr
               onPress={() => onPayModeChange("cash")}
               className={`flex-1 items-center rounded-xl border py-2 ${payMode === "cash" ? "border-primary bg-primary/10" : "border-border"}`}
             >
-              <Text className="font-inter text-xs font-semibold text-text">Cash (demo)</Text>
+              <Text className="font-inter text-xs font-semibold text-text">{cashLabel}</Text>
             </Pressable>
           </View>
         ) : null}
 
         {payMode === "cash" && cashOk ? (
           <Text className="font-inter mt-2 text-xs text-textSecondary">
-            No card authorisation — for development only. Configure Stripe for production card bookings.
+            {stripeOn
+              ? "Pay the driver in cash at the end of the trip. Card authorisation is skipped for this booking."
+              : "Development mode: no Stripe key configured, so trips book without card authorisation. Add EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY for live card payments."}
           </Text>
         ) : null}
 

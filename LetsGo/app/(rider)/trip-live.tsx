@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import type { Href } from "expo-router";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
@@ -10,22 +9,25 @@ import {
   BackHandler,
   Platform,
   Pressable,
-  Share,
   Text,
   View,
 } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { TripChatModal } from "@/components/trip/TripChatModal";
+import { TripSosButton } from "@/components/safety/TripSosButton";
 import { DriverMarker } from "@/components/rider/DriverMarker";
 import { RoutePolyline } from "@/components/rider/RoutePolyline";
 import { useAuth } from "@/hooks/useAuth";
 import { useDriverLocation } from "@/hooks/useDriverLocation";
 import { useTripStatus } from "@/hooks/useTripStatus";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
-import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { useMapStyle } from "@/hooks/useMapStyle";
+import { useModalChrome } from "@/hooks/useModalChrome";
+import { useTheme } from "@/hooks/useTheme";
+import { MapFloatingCard } from "@/components/ui/MapFloatingCard";
+import { shareActiveTrip } from "@/lib/shareTrip";
 import { supabase } from "@/lib/supabase";
-
-const SHARE_BASE = "https://letsgo.app/track/";
 
 type TripRow = {
   status: string;
@@ -35,12 +37,16 @@ type TripRow = {
   pickup_lng: number;
   dropoff_lat: number;
   dropoff_lng: number;
+  pickup_address: string;
   dropoff_address: string;
   estimated_fare: number | null;
   final_fare: number | null;
 };
 
 export default function RiderTripLiveScreen() {
+  const mapStyle = useMapStyle();
+  const { colors } = useTheme();
+  const chrome = useModalChrome();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { tripId } = useLocalSearchParams<{ tripId: string }>();
@@ -50,6 +56,8 @@ export default function RiderTripLiveScreen() {
 
   const [trip, setTrip] = useState<TripRow | null>(null);
   const [driverName, setDriverName] = useState<string | null>(null);
+  const [driverPhone, setDriverPhone] = useState<string | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [coords, setCoords] = useState<{ latitude: number; longitude: number }[]>([]);
@@ -71,7 +79,7 @@ export default function RiderTripLiveScreen() {
     const { data, error: qErr } = await supabase
       .from("trips")
       .select(
-        "status, rider_id, driver_id, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, dropoff_address, estimated_fare, final_fare"
+        "status, rider_id, driver_id, pickup_lat, pickup_lng, pickup_address, dropoff_lat, dropoff_lng, dropoff_address, estimated_fare, final_fare"
       )
       .eq("id", tripId)
       .maybeSingle();
@@ -111,10 +119,11 @@ export default function RiderTripLiveScreen() {
     if (t.driver_id) {
       const { data: prof } = await supabase
         .from("profiles")
-        .select("full_name")
+        .select("full_name, phone")
         .eq("id", t.driver_id)
         .maybeSingle();
       setDriverName(prof?.full_name ?? "Your driver");
+      setDriverPhone(prof?.phone ?? null);
     } else {
       setDriverName(null);
     }
@@ -176,18 +185,13 @@ export default function RiderTripLiveScreen() {
     }, [load])
   );
 
-  async function shareTrip() {
-    if (!tripId) return;
-    const url = `${SHARE_BASE}${tripId}`;
-    try {
-      await Clipboard.setStringAsync(url);
-      await Share.share({
-        message: `Follow my Lets Go trip: ${url}`,
-        url: Platform.OS === "ios" ? url : undefined,
-      });
-    } catch {
-      Alert.alert("Share", "Could not open share sheet.");
-    }
+  function shareTrip() {
+    if (!tripId || !trip) return;
+    void shareActiveTrip(tripId, {
+      driverName: driverName || undefined,
+      pickup: trip.pickup_address,
+      dropoff: trip.dropoff_address,
+    });
   }
 
   const mapReady = Platform.OS !== "web";
@@ -224,7 +228,7 @@ export default function RiderTripLiveScreen() {
           ref={mapRef}
           style={{ flex: 1 }}
           provider={PROVIDER_GOOGLE}
-          customMapStyle={mapDarkStyle}
+          customMapStyle={mapStyle}
           initialRegion={{
             latitude: trip.dropoff_lat,
             longitude: trip.dropoff_lng,
@@ -263,28 +267,17 @@ export default function RiderTripLiveScreen() {
         className="absolute left-3 right-3 flex-row items-center justify-between"
         style={{ top: insets.top + 8 }}
       >
-        <Pressable
-          onPress={() =>
-            Alert.alert("Emergency", "Call 000 for police, fire, or ambulance?", [
-              { text: "No", style: "cancel" },
-              { text: "Call 000", style: "destructive", onPress: () => void Linking.openURL("tel:000") },
-            ])
-          }
-          className="rounded-full border border-red-500/80 bg-red-500/20 px-3 py-2"
-        >
-          <Text className="font-inter text-xs font-bold text-red-400">SOS</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => void shareTrip()}
-          className="flex-row items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-2"
-        >
-          <Ionicons name="share-outline" size={18} color="#E8ECF2" />
-          <Text className="font-inter text-xs font-semibold text-text">Share trip</Text>
+        <TripSosButton tripId={tripId} />
+        <Pressable onPress={() => void shareTrip()} className="active:opacity-90">
+          <MapFloatingCard className="flex-row items-center gap-2 px-3 py-2">
+            <Ionicons name="share-outline" size={18} color={colors.text} />
+            <Text className="font-inter text-xs font-semibold text-text">Share trip</Text>
+          </MapFloatingCard>
         </Pressable>
       </View>
 
-      <View
-        className="absolute left-3 right-3 rounded-2xl border border-border bg-background/95 px-4 py-3"
+      <MapFloatingCard
+        className="absolute left-3 right-3 px-4 py-3"
         style={{ bottom: insets.bottom + 16 }}
       >
         <Text className="font-inter text-xs font-semibold uppercase text-textSecondary">Driver</Text>
@@ -298,7 +291,32 @@ export default function RiderTripLiveScreen() {
         <Text className="font-inter mt-2 text-xs text-textSecondary">
           Final fare is confirmed when you arrive
         </Text>
-      </View>
+        <View className="mt-3 flex-row gap-3">
+          {driverPhone ? (
+            <Pressable
+              onPress={() => void Linking.openURL(`tel:${driverPhone.replace(/\s/g, "")}`)}
+              className="flex-1 items-center rounded-xl border border-border py-2.5 active:opacity-80"
+            >
+              <Text className="font-inter text-sm font-semibold text-primary">Call</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            onPress={() => setChatOpen(true)}
+            className="flex-1 items-center rounded-xl border border-border py-2.5 active:opacity-80"
+          >
+            <Text className="font-inter text-sm font-semibold text-text">Chat</Text>
+          </Pressable>
+        </View>
+      </MapFloatingCard>
+
+      <TripChatModal
+        visible={chatOpen}
+        onClose={() => setChatOpen(false)}
+        tripId={tripId}
+        selfUserId={user?.id}
+        peerPhone={driverPhone}
+        peerLabel={driverName ?? "Driver"}
+      />
     </View>
   );
 }

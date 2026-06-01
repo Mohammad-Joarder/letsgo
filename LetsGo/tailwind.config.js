@@ -5,16 +5,17 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        primary: "#00D4AA",
-        background: "#0A0E1A",
-        surface: "#131929",
-        surface2: "#1C2438",
-        text: "#FFFFFF",
-        textSecondary: "#8A94A6",
-        accent: "#FF6B35",
-        success: "#22C55E",
-        error: "#EF4444",
-        border: "#1E2D45",
+        primary: "rgb(var(--color-primary) / <alpha-value>)",
+        background: "rgb(var(--color-background) / <alpha-value>)",
+        surface: "rgb(var(--color-surface) / <alpha-value>)",
+        surface2: "rgb(var(--color-surface2) / <alpha-value>)",
+        text: "rgb(var(--color-text) / <alpha-value>)",
+        textSecondary: "rgb(var(--color-text-secondary) / <alpha-value>)",
+        accent: "rgb(var(--color-accent) / <alpha-value>)",
+        success: "rgb(var(--color-success) / <alpha-value>)",
+        error: "rgb(var(--color-error) / <alpha-value>)",
+        warning: "rgb(var(--color-warning) / <alpha-value>)",
+        border: "rgb(var(--color-border) / <alpha-value>)",
       },
       fontFamily: {
         sora: ["Sora_600SemiBold"],

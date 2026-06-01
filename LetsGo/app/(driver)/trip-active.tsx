@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import type { Href } from "expo-router";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import * as Linking from "expo-linking";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -14,7 +15,11 @@ import {
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { RoutePolyline } from "@/components/rider/RoutePolyline";
+import { TripSosButton } from "@/components/safety/TripSosButton";
 import { Button } from "@/components/ui/Button";
+import { TripChatModal } from "@/components/trip/TripChatModal";
+import { useAuth } from "@/hooks/useAuth";
+import { useDriverTripRecording } from "@/hooks/useDriverTripRecording";
 import { useTripStatus } from "@/hooks/useTripStatus";
 import { completeTrip } from "@/lib/driverEdge";
 import { fetchRoutePolyline } from "@/lib/googleDirections";
@@ -22,7 +27,9 @@ import { haversineMeters } from "@/lib/geo";
 import { startDriverLocationService } from "@/lib/location/driverLocationService";
 import { getCurrentPositionReliable } from "@/lib/location";
 import { DEV_END_TRIP_WITHOUT_DROP_OFF } from "@/lib/devTripFlags";
-import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { useMapStyle } from "@/hooks/useMapStyle";
+import { useTheme } from "@/hooks/useTheme";
+import { MapFloatingCard } from "@/components/ui/MapFloatingCard";
 import { supabase } from "@/lib/supabase";
 
 type TripFull = {
@@ -38,13 +45,19 @@ type TripFull = {
 };
 
 export default function TripActiveScreen() {
+  const mapStyle = useMapStyle();
+  const { colors } = useTheme();
   const { tripId } = useLocalSearchParams<{ tripId: string }>();
+  const { user } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
+  const { start: startTripRecording, stop: stopTripRecording } = useDriverTripRecording();
 
   const [trip, setTrip] = useState<TripFull | null>(null);
   const [riderName, setRiderName] = useState("");
+  const [riderPhone, setRiderPhone] = useState<string | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
   const [pinInput, setPinInput] = useState("");
   const [pinOk, setPinOk] = useState(false);
   const [pinError, setPinError] = useState<string | null>(null);
@@ -92,10 +105,11 @@ export default function TripActiveScreen() {
     }
     const { data: prof } = await supabase
       .from("profiles")
-      .select("full_name")
+      .select("full_name, phone")
       .eq("id", t.rider_id)
       .maybeSingle();
     setRiderName(prof?.full_name ?? "Rider");
+    setRiderPhone(prof?.phone ?? null);
     setLoading(false);
   }, [tripId, router]);
 
@@ -168,6 +182,15 @@ export default function TripActiveScreen() {
     return () => clearInterval(id);
   }, [pinOk, startedAt]);
 
+  useEffect(() => {
+    if (pinOk && trip?.status === "in_progress") {
+      void startTripRecording();
+    }
+    return () => {
+      void stopTripRecording();
+    };
+  }, [pinOk, trip?.status, trip?.id, startTripRecording, stopTripRecording]);
+
   async function startTripDb() {
     if (!tripId) return;
     const { error } = await supabase
@@ -191,7 +214,7 @@ export default function TripActiveScreen() {
       return;
     }
     if (pinInput.trim() !== String(trip.pickup_pin)) {
-      setPinError("PIN does not match.");
+      setPinError("Incorrect PIN — please verify you are in the right vehicle.");
       return;
     }
     setPinError(null);
@@ -216,13 +239,14 @@ export default function TripActiveScreen() {
     if (!tripId || !trip) return;
     setEnding(true);
     try {
+      const recorded = await stopTripRecording();
       const res = await completeTrip({
         trip_id: tripId,
         final_fare: trip.estimated_fare != null ? Number(trip.estimated_fare) : undefined,
       });
       if (!res.ok) throw new Error(res.error ?? "complete-trip failed");
       router.replace(
-        `/(driver)/trip-summary?tripId=${tripId}&net=${res.net_earnings ?? 0}&final=${res.final_fare ?? 0}` as Href
+        `/(driver)/trip-summary?tripId=${tripId}&net=${res.net_earnings ?? 0}&final=${res.final_fare ?? 0}&recorded=${recorded ? "1" : "0"}` as Href
       );
     } catch (e) {
       Alert.alert("End trip failed", e instanceof Error ? e.message : "Try again.");
@@ -243,12 +267,16 @@ export default function TripActiveScreen() {
 
   return (
     <View className="flex-1 bg-background">
+      <View className="absolute right-4 z-10" style={{ top: insets.top + 8 }} pointerEvents="box-none">
+        <TripSosButton tripId={tripId} variant="icon" />
+      </View>
+
       {Platform.OS !== "web" && pinOk ? (
         <MapView
           ref={mapRef}
           style={{ flex: 1 }}
           provider={PROVIDER_GOOGLE}
-          customMapStyle={mapDarkStyle}
+          customMapStyle={mapStyle}
           initialRegion={{
             latitude: trip.dropoff_lat,
             longitude: trip.dropoff_lng,
@@ -305,8 +333,8 @@ export default function TripActiveScreen() {
       )}
 
       {!showPinGate && pinOk ? (
-        <View
-          className="absolute left-4 right-4 flex-row items-center rounded-xl border border-border bg-background/95 px-3 py-2"
+        <MapFloatingCard
+          className="absolute left-4 right-4 flex-row items-center px-3 py-2"
           style={{ top: insets.top + 8 }}
         >
           {headerCanGoBack ? (
@@ -316,7 +344,7 @@ export default function TripActiveScreen() {
               }}
               hitSlop={12}
             >
-              <Ionicons name="chevron-back" size={22} color="#E8ECF2" />
+              <Ionicons name="chevron-back" size={22} color={colors.text} />
             </Pressable>
           ) : (
             <View style={{ width: 22 }} />
@@ -324,8 +352,8 @@ export default function TripActiveScreen() {
           <Text className="font-sora flex-1 text-center text-sm font-semibold text-text">
             To drop-off{etaMin != null ? ` · ~${etaMin} min` : ""}
           </Text>
-          <View className="w-6" />
-        </View>
+          <View className="w-10" />
+        </MapFloatingCard>
       ) : null}
 
       {!showPinGate && pinOk ? (
@@ -338,6 +366,22 @@ export default function TripActiveScreen() {
           <Text className="font-inter mt-3 text-sm text-text">
             Trip time: {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}
           </Text>
+          <View className="mt-3 flex-row gap-3">
+            {riderPhone ? (
+              <Pressable
+                onPress={() => void Linking.openURL(`tel:${riderPhone.replace(/\s/g, "")}`)}
+                className="flex-1 items-center rounded-xl border border-border py-3 active:opacity-80"
+              >
+                <Text className="font-inter text-sm font-semibold text-primary">Call</Text>
+              </Pressable>
+            ) : null}
+            <Pressable
+              onPress={() => setChatOpen(true)}
+              className="flex-1 items-center rounded-xl border border-border py-3 active:opacity-80"
+            >
+              <Text className="font-inter text-sm font-semibold text-text">Message</Text>
+            </Pressable>
+          </View>
           <Text className="font-inter mt-2 text-xs text-textSecondary">
             {DEV_END_TRIP_WITHOUT_DROP_OFF && !nearDropoff && trip?.status === "in_progress"
               ? "[Test] End Trip allowed without driving to drop-off. Set EXPO_PUBLIC_DEV_END_TRIP_ANYWHERE=false to require 300 m in dev."
@@ -355,6 +399,15 @@ export default function TripActiveScreen() {
           </View>
         </View>
       ) : null}
+
+      <TripChatModal
+        visible={chatOpen}
+        onClose={() => setChatOpen(false)}
+        tripId={tripId}
+        selfUserId={user?.id}
+        peerPhone={riderPhone}
+        peerLabel={riderName}
+      />
     </View>
   );
 }

@@ -1,6 +1,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { audToCents, getStripe } from "../_shared/stripe.ts";
+import {
+  pickPayoutSourceType,
+  waitForConnectBalance,
+} from "../_shared/stripeConnectBalance.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -148,24 +152,85 @@ Deno.serve(async (req) => {
 
     const stripe = getStripe();
     const summaryIds = rows.map((r) => r.id).join(",");
+    const currency = "aud";
 
-    const transfer = await stripe.transfers.create({
-      amount: amountCents,
-      currency: "aud",
-      destination: connectId,
-      metadata: {
-        driver_id: user.id,
-        driver_earnings_summary_ids: summaryIds,
-      },
-    });
+    // Trip completion transfers net earnings to Connect — wait for total available (not bank_account only).
+    let { available: connectAvailable, balance, snapshot } = await waitForConnectBalance(
+      stripe,
+      connectId,
+      amountCents,
+      currency,
+      { attempts: 3, delayMs: 300 }
+    );
+
+    let transferId: string | null = null;
+
+    // Platform top-up when DB pending earnings exceed Connect available (legacy / missed transfers).
+    if (connectAvailable < amountCents) {
+      const shortfall = amountCents - connectAvailable;
+      if (shortfall >= 50) {
+        const transfer = await stripe.transfers.create({
+          amount: shortfall,
+          currency,
+          destination: connectId,
+          metadata: {
+            driver_id: user.id,
+            driver_earnings_summary_ids: summaryIds,
+            kind: "payout_top_up",
+          },
+        });
+        transferId = transfer.id;
+        ({ available: connectAvailable, balance, snapshot } = await waitForConnectBalance(
+          stripe,
+          connectId,
+          amountCents,
+          currency,
+          { attempts: 15, delayMs: 600 }
+        ));
+      }
+    }
+
+    const payoutCents = Math.min(amountCents, connectAvailable);
+    if (payoutCents < 50) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error:
+            snapshot.pendingCents > 0
+              ? "Your Stripe balance is still settling from recent trips. Try again in a few hours."
+              : "Stripe Connect balance is not available yet. Complete a paid trip or try again shortly.",
+          available_cents: snapshot.availableCents,
+          pending_cents: snapshot.pendingCents,
+          bank_account_cents: snapshot.bankAccountAvailableCents,
+          card_cents: snapshot.cardAvailableCents,
+          requested_cents: amountCents,
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const sourceType = pickPayoutSourceType(balance, payoutCents, currency);
+    if (!sourceType) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: "Could not determine Stripe payout source. Try again in a few minutes.",
+          available_cents: snapshot.availableCents,
+          requested_cents: payoutCents,
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     const payout = await stripe.payouts.create(
       {
-        amount: amountCents,
-        currency: "aud",
+        amount: payoutCents,
+        currency,
+        source_type: sourceType,
         metadata: {
           driver_id: user.id,
-          transfer_id: transfer.id,
+          driver_earnings_summary_ids: summaryIds,
+          ...(transferId ? { transfer_id: transferId } : {}),
         },
       },
       { stripeAccount: connectId }
@@ -177,7 +242,7 @@ Deno.serve(async (req) => {
       .update({
         payout_status: "processing",
         stripe_payout_id: payout.id,
-        stripe_transfer_id: transfer.id,
+        stripe_transfer_id: transferId,
       })
       .in("id", ids);
 
@@ -185,16 +250,18 @@ Deno.serve(async (req) => {
       JSON.stringify({
         ok: true,
         payout_id: payout.id,
-        transfer_id: transfer.id,
+        transfer_id: transferId,
+        amount_cents: payoutCents,
         estimated_arrival: payout.arrival_date ?? null,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (e) {
     console.error(e);
-    return new Response(
-      JSON.stringify({ ok: false, error: e instanceof Error ? e.message : "Server error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    const msg = e instanceof Error ? e.message : "Server error";
+    return new Response(JSON.stringify({ ok: false, error: msg }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });

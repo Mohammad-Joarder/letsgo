@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, Platform, Pressable, Text, View } from "react-native";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { useMapStyle } from "@/hooks/useMapStyle";
+import { useTheme } from "@/hooks/useTheme";
 import type { TripOfferPayload } from "@/lib/driverTypes";
 
 type Props = {
@@ -25,6 +26,8 @@ function offerTimerKey(offer: TripOfferPayload | null): string | null {
 }
 
 export function TripRequestModal({ visible, offer, loading, onAccept, onDecline }: Props) {
+  const mapStyle = useMapStyle();
+  const { colors } = useTheme();
   const [secondsLeft, setSecondsLeft] = useState(15);
   const timedOutRef = useRef(false);
   const onAcceptRef = useRef(onAccept);
@@ -86,7 +89,7 @@ export function TripRequestModal({ visible, offer, loading, onAccept, onDecline 
 
         <View className="mb-4 flex-row items-center gap-3">
           <View className="h-14 w-14 items-center justify-center rounded-2xl bg-surface2">
-            <Ionicons name="person" size={28} color="#00D4AA" />
+            <Ionicons name="person" size={28} color={colors.primary} />
           </View>
           <View className="flex-1">
             <Text className="font-sora text-lg font-semibold text-text">{offer.rider_name}</Text>
@@ -99,6 +102,14 @@ export function TripRequestModal({ visible, offer, loading, onAccept, onDecline 
           </View>
           <Badge label={rideLabel} tone="default" />
         </View>
+
+        {offer.scheduled_pickup_at ? (
+          <View className="mb-4 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2">
+            <Text className="font-inter text-center text-xs font-semibold text-warning">
+              Scheduled pickup · {new Date(offer.scheduled_pickup_at).toLocaleString()}
+            </Text>
+          </View>
+        ) : null}
 
         <View className="mb-4 rounded-2xl border border-border bg-surface2/80 p-4">
           <Row icon="navigate" label="Pickup" value={offer.pickup_address} />
@@ -135,7 +146,7 @@ export function TripRequestModal({ visible, offer, loading, onAccept, onDecline 
             <MapView
               style={{ flex: 1 }}
               provider={PROVIDER_GOOGLE}
-              customMapStyle={mapDarkStyle}
+              customMapStyle={mapStyle}
               initialRegion={{
                 latitude: offer.pickup_lat,
                 longitude: offer.pickup_lng,
@@ -164,9 +175,10 @@ export function TripRequestModal({ visible, offer, loading, onAccept, onDecline 
 }
 
 function Row({ icon, label, value }: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string }) {
+  const { colors } = useTheme();
   return (
     <View className="flex-row gap-3">
-      <Ionicons name={icon} size={18} color="#8A94A6" style={{ marginTop: 2 }} />
+      <Ionicons name={icon} size={18} color={colors.textSecondary} style={{ marginTop: 2 }} />
       <View className="flex-1">
         <Text className="font-inter text-xs font-semibold uppercase text-textSecondary">{label}</Text>
         <Text className="font-inter mt-1 text-sm leading-5 text-text">{value}</Text>

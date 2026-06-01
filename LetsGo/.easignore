@@ -1,0 +1,6 @@
+# Shrink upload size for EAS Build (not needed in the native app bundle)
+supabase/
+agent-transcripts/
+.cursor/
+**/*.md
+!README.md

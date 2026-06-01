@@ -1,17 +1,24 @@
-import { Ionicons } from "@expo/vector-icons";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useEffect } from "react";
+import { RideTypeImage } from "@/components/rider/RideTypeImage";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import Animated, { FadeInDown } from "react-native-reanimated";
+import Animated, {
+  FadeInDown,
+  interpolate,
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from "react-native-reanimated";
+import { useTheme } from "@/hooks/useTheme";
 import type { FareEstimateOption } from "@/lib/bookingTypes";
 import { RIDE_META } from "@/lib/rideMeta";
 
-const C = {
-  primary: "#00D4AA",
-  background: "#0A0E1A",
-  surface2: "#1C2438",
-  border: "#1E2D45",
-  text: "#FFFFFF",
-  textSecondary: "#8A94A6",
-};
+const SPRING = { damping: 20, stiffness: 280, mass: 0.7 };
+
+function hexWithAlpha(hex: string, alpha: string): string {
+  return `${hex}${alpha}`;
+}
 
 type Props = {
   option: FareEstimateOption;
@@ -22,37 +29,65 @@ type Props = {
 };
 
 export function RideTypeCard({ option, index, selected, durationMin, onPress }: Props) {
+  const { colors, colorTheme } = useTheme();
   const meta = RIDE_META[option.ride_type];
   const estMin = durationMin != null ? durationMin + meta.estMinBase : meta.estMinBase + 8;
+  const selectedBg = hexWithAlpha(colors.primary, "22");
+  const selectedIconBg = hexWithAlpha(colors.primary, "33");
+  const checkIconColor = colorTheme === "light" ? "#FFFFFF" : colors.background;
+
+  const progress = useSharedValue(selected ? 1 : 0);
+
+  useEffect(() => {
+    progress.value = withSpring(selected ? 1 : 0, SPRING);
+  }, [selected, progress]);
+
+  const cardAnim = useAnimatedStyle(() => ({
+    borderColor: interpolateColor(progress.value, [0, 1], [colors.border, colors.primary]),
+    backgroundColor: interpolateColor(progress.value, [0, 1], [colors.surface2, selectedBg]),
+    transform: [{ scale: interpolate(progress.value, [0, 1], [1, 1.02]) }],
+  }));
+
+  const iconWrapAnim = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(progress.value, [0, 1], [colors.surface3, selectedIconBg]),
+    transform: [{ scale: interpolate(progress.value, [0, 1], [1, 1.06]) }],
+  }));
+
+  const checkAnim = useAnimatedStyle(() => ({
+    opacity: progress.value,
+    transform: [{ scale: interpolate(progress.value, [0, 1], [0.6, 1]) }],
+  }));
 
   return (
-    <Animated.View entering={FadeInDown.delay(index * 70).springify()}>
+    <Animated.View entering={FadeInDown.delay(index * 60).springify().damping(18)}>
       <Pressable
         onPress={onPress}
-        style={({ pressed }) => [
-          styles.card,
-          selected ? styles.cardSelected : styles.cardIdle,
-          pressed && styles.cardPressed,
-        ]}
+        accessibilityRole="radio"
+        accessibilityState={{ selected }}
+        accessibilityLabel={`${meta.label}, ${meta.tagline}`}
       >
-        <View style={styles.row}>
-          <View style={[styles.iconWrap, selected ? styles.iconWrapSelected : styles.iconWrapIdle]}>
-            <Ionicons
-              name={meta.icon as keyof typeof Ionicons.glyphMap}
-              size={22}
-              color={selected ? C.primary : C.textSecondary}
-            />
+        <Animated.View style={[styles.card, cardAnim]}>
+          <View style={styles.row}>
+            <Animated.View style={[styles.iconWrap, iconWrapAnim]}>
+              <RideTypeImage type={option.ride_type} size={52} />
+            </Animated.View>
+            <View style={styles.mid}>
+              <Text style={[styles.title, { color: colors.text }]}>{meta.label}</Text>
+              <Text style={[styles.tagline, { color: colors.textSecondary }]}>{meta.tagline}</Text>
+              <Text style={[styles.subtitle, { color: colors.textMuted }]}>
+                {meta.seats} seats · ~{estMin} min
+              </Text>
+            </View>
+            <View style={styles.priceCol}>
+              <Text style={[styles.price, { color: colors.text }]}>
+                ${option.estimated_fare.toFixed(2)}
+              </Text>
+              <Animated.View style={[styles.check, checkAnim, { backgroundColor: colors.primary }]}>
+                <MaterialCommunityIcons name="check" size={14} color={checkIconColor} />
+              </Animated.View>
+            </View>
           </View>
-          <View style={styles.mid}>
-            <Text style={styles.title}>{meta.label}</Text>
-            <Text style={styles.subtitle}>
-              {meta.seats} seats · ~{estMin} min
-            </Text>
-          </View>
-          <View style={styles.priceCol}>
-            <Text style={styles.price}>${option.estimated_fare.toFixed(2)}</Text>
-          </View>
-        </View>
+        </Animated.View>
       </Pressable>
     </Animated.View>
   );
@@ -65,31 +100,18 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     padding: 16,
   },
-  cardSelected: {
-    borderColor: C.primary,
-    backgroundColor: "rgba(0, 212, 170, 0.1)",
-  },
-  cardIdle: {
-    borderColor: C.border,
-    backgroundColor: "rgba(28, 36, 56, 0.9)",
-  },
-  cardPressed: {
-    opacity: 0.9,
-  },
   row: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 14,
   },
   iconWrap: {
-    borderRadius: 12,
-    padding: 8,
-  },
-  iconWrapSelected: {
-    backgroundColor: "rgba(0, 212, 170, 0.25)",
-  },
-  iconWrapIdle: {
-    backgroundColor: "rgba(10, 14, 26, 0.8)",
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
   },
   mid: {
     flex: 1,
@@ -98,21 +120,31 @@ const styles = StyleSheet.create({
     fontFamily: "Sora_600SemiBold",
     fontSize: 16,
     fontWeight: "600",
-    color: C.text,
+  },
+  tagline: {
+    fontFamily: "Inter_400Regular",
+    marginTop: 2,
+    fontSize: 12,
   },
   subtitle: {
     fontFamily: "Inter_400Regular",
     marginTop: 2,
-    fontSize: 12,
-    color: C.textSecondary,
+    fontSize: 11,
   },
   priceCol: {
     alignItems: "flex-end",
+    gap: 8,
   },
   price: {
     fontFamily: "Sora_600SemiBold",
     fontSize: 18,
     fontWeight: "700",
-    color: C.text,
+  },
+  check: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
   },
 });

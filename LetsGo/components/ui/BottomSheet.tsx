@@ -5,8 +5,9 @@ import {
   BottomSheetView,
   type BottomSheetModalProps,
 } from "@gorhom/bottom-sheet";
-import { forwardRef, useMemo } from "react";
+import { forwardRef, useCallback, useMemo } from "react";
 import { Text } from "react-native";
+import { useModalChrome } from "@/hooks/useModalChrome";
 
 export type BottomSheetProps = Omit<BottomSheetModalProps, "children"> & {
   title?: string;
@@ -14,24 +15,26 @@ export type BottomSheetProps = Omit<BottomSheetModalProps, "children"> & {
   snapPoints?: (string | number)[];
 };
 
-function renderBackdrop(props: BottomSheetBackdropProps) {
-  return (
-    <BottomSheetBackdrop
-      {...props}
-      appearsOnIndex={0}
-      disappearsOnIndex={-1}
-      opacity={0.55}
-      pressBehavior="close"
-    />
-  );
-}
-
 export const BottomSheet = forwardRef<BottomSheetModal, BottomSheetProps>(
   function BottomSheet(
     { title, children, snapPoints = ["40%", "75%"], onChange, ...rest },
     ref
   ) {
+    const chrome = useModalChrome();
     const points = useMemo(() => snapPoints, [snapPoints]);
+
+    const renderBackdrop = useCallback(
+      (props: BottomSheetBackdropProps) => (
+        <BottomSheetBackdrop
+          {...props}
+          appearsOnIndex={0}
+          disappearsOnIndex={-1}
+          opacity={chrome.bottomSheet.backdropOpacity}
+          pressBehavior="close"
+        />
+      ),
+      [chrome.bottomSheet.backdropOpacity]
+    );
 
     return (
       <BottomSheetModal
@@ -39,8 +42,8 @@ export const BottomSheet = forwardRef<BottomSheetModal, BottomSheetProps>(
         index={0}
         snapPoints={points}
         enablePanDownToClose
-        backgroundStyle={{ backgroundColor: "#131929" }}
-        handleIndicatorStyle={{ backgroundColor: "#1E2D45" }}
+        backgroundStyle={chrome.bottomSheet.backgroundStyle}
+        handleIndicatorStyle={chrome.bottomSheet.handleIndicatorStyle}
         backdropComponent={renderBackdrop}
         onChange={onChange}
         {...rest}

@@ -1,8 +1,9 @@
+import { Ionicons } from "@expo/vector-icons";
 import type { Href } from "expo-router";
 import * as Location from "expo-location";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Platform, Switch, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, Switch, Text, View } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import Animated, {
   useAnimatedStyle,
@@ -15,16 +16,19 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/hooks/useAuth";
 import { useDriverMapLocation } from "@/hooks/useDriverMapLocation";
 import { useProfile } from "@/hooks/useProfile";
+import { useUnreadNotificationCount } from "@/hooks/useUnreadNotificationCount";
 import { updateDriverLocation } from "@/lib/driverEdge";
 import { getCurrentPositionReliable } from "@/lib/location";
-import { mapDarkStyle } from "@/lib/mapDarkStyle";
+import { useMapStyle } from "@/hooks/useMapStyle";
 import { supabase } from "@/lib/supabase";
 
 export default function DriverHomeScreen() {
+  const mapStyle = useMapStyle();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
   const { profile } = useProfile();
+  const unread = useUnreadNotificationCount(user?.id);
   const mapRef = useRef<MapView>(null);
   const [isOnline, setIsOnline] = useState(false);
   const [driverRowLoading, setDriverRowLoading] = useState(true);
@@ -32,12 +36,17 @@ export default function DriverHomeScreen() {
   const [todayTrips, setTodayTrips] = useState(0);
   const [todayEarnings, setTodayEarnings] = useState(0);
   const [rating, setRating] = useState<number | null>(null);
+  const [tierLabel, setTierLabel] = useState<string>("");
+  const [tierProgress, setTierProgress] = useState<string>("");
   const [locError, setLocError] = useState<string | null>(null);
-  const [tabFocused, setTabFocused] = useState(true);
 
   const { coord, region, onRegionChangeComplete, syncError } = useDriverMapLocation({
-    /** Keep streaming on Home whenever online; stack screens (pickup / active trip) run their own GPS. */
-    active: isOnline && tabFocused,
+    /**
+     * Must stay true for every tab while online: `nearby_drivers_for_ride` uses `drivers.current_location`.
+     * Previously we gated on Home-tab focus only — drivers on Earnings/Account stayed "online" in the DB but
+     * stopped pushing GPS, so their point went stale and dispatch became "random" vs rider pickup.
+     */
+    active: isOnline,
     mapRef,
     serverPushIntervalMs: 5000,
     exponentialBackoffOnPushFailure: true,
@@ -65,12 +74,25 @@ export default function DriverHomeScreen() {
     }
     const { data, error } = await supabase
       .from("drivers")
-      .select("is_online, current_status, rating")
+      .select("is_online, current_status, rating, tier, tier_trips_this_period")
       .eq("id", user.id)
       .maybeSingle();
     if (!error && data) {
       setIsOnline(Boolean(data.is_online) && data.current_status !== "offline");
       setRating(data.rating != null ? Number(data.rating) : null);
+      const tier = String(data.tier ?? "standard");
+      const n = Number(data.tier_trips_this_period ?? 0);
+      setTierLabel(tier.charAt(0).toUpperCase() + tier.slice(1));
+      if (n >= 100) {
+        setTierProgress(`${n} trips · top tier`);
+      } else {
+        const nextThreshold = n < 20 ? 20 : n < 50 ? 50 : 100;
+        const prevThreshold = n < 20 ? 0 : n < 50 ? 20 : 50;
+        const span = Math.max(1, nextThreshold - prevThreshold);
+        const prog = Math.min(1, Math.max(0, (n - prevThreshold) / span));
+        const pct = Math.round(prog * 100);
+        setTierProgress(`${n} / ${nextThreshold} toward next (${pct}%)`);
+      }
     }
     setDriverRowLoading(false);
   }, [user?.id]);
@@ -93,10 +115,8 @@ export default function DriverHomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      setTabFocused(true);
       void loadDriverRow();
       void loadTodayStats();
-      return () => setTabFocused(false);
     }, [loadDriverRow, loadTodayStats])
   );
 
@@ -190,7 +210,7 @@ export default function DriverHomeScreen() {
             ref={mapRef}
             style={{ flex: 1 }}
             provider={PROVIDER_GOOGLE}
-            customMapStyle={mapDarkStyle}
+            customMapStyle={mapStyle}
             initialRegion={region}
             showsUserLocation={false}
             onRegionChangeComplete={onRegionChangeComplete}
@@ -219,13 +239,32 @@ export default function DriverHomeScreen() {
         pointerEvents="box-none"
       >
         <View className="rounded-2xl border border-border/80 bg-background/90 px-4 py-3">
-          <View className="flex-row items-center justify-between">
-            <View className="flex-1">
-              <Text className="font-inter text-xs text-textSecondary">Driver</Text>
-              <Text className="font-sora text-lg font-semibold text-text" numberOfLines={1}>
-                {profile?.full_name ?? "Partner"}
+        <View className="flex-row items-center justify-between">
+          <View className="flex-1 pr-2">
+            <Text className="font-inter text-xs text-textSecondary">Driver</Text>
+            <Text className="font-sora text-lg font-semibold text-text" numberOfLines={1}>
+              {profile?.full_name ?? "Partner"}
+            </Text>
+            {tierLabel ? (
+              <Text className="font-inter mt-1 text-xs text-primary">
+                {tierLabel} · {tierProgress}
               </Text>
-            </View>
+            ) : null}
+          </View>
+          <View className="flex-row items-center gap-2">
+            <Pressable
+              onPress={() => router.push("/(driver)/(tabs)/notifications" as Href)}
+              className="relative h-10 w-10 items-center justify-center rounded-full border border-border/60 bg-background/80"
+            >
+              <Ionicons name="notifications-outline" size={20} color="#E8ECF2" />
+              {unread > 0 ? (
+                <View className="absolute -right-0.5 -top-0.5 min-h-[16px] min-w-[16px] items-center justify-center rounded-full bg-red-500 px-0.5">
+                  <Text className="font-inter text-[9px] font-bold text-white">
+                    {unread > 9 ? "9+" : unread}
+                  </Text>
+                </View>
+              ) : null}
+            </Pressable>
             {driverRowLoading ? (
               <ActivityIndicator color="#00D4AA" />
             ) : (
@@ -245,6 +284,7 @@ export default function DriverHomeScreen() {
               </View>
             )}
           </View>
+        </View>
           <Text className="font-inter mt-2 text-sm text-textSecondary">
             {isOnline ? "You are online — offers will appear here." : "Go online to receive trips."}
           </Text>

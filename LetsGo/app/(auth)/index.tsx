@@ -36,7 +36,7 @@ export default function WelcomeScreen() {
               className="items-center self-center rounded-3xl border border-white/20 bg-white px-6 py-8 shadow-2xl shadow-black/60"
               style={styles.logoCard}
             >
-              <AppLogo width={280} height={100} />
+              <AppLogo width={280} height={210} />
             </View>
             <Text className="font-inter mt-8 text-center text-base leading-6 text-textSecondary">
               {BRAND_TAGLINE}
