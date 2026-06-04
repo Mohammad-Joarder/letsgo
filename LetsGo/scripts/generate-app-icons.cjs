@@ -22,6 +22,22 @@ async function ensureSource() {
   }
 }
 
+/**
+ * Re-encode the brand PNG so Android AAPT2 accepts it. Metro copies `require()`'d images
+ * into `drawable-*`; unusual ICC / color space / PNG encoding can trigger:
+ * `AAPT: error: file failed to compile` on :app:mergeReleaseResources.
+ */
+async function normalizeSourceForAapt() {
+  const tmp = `${SOURCE}.tmp.png`;
+  await sharp(SOURCE)
+    .rotate()
+    .ensureAlpha()
+    .toColorspace("srgb")
+    .png({ compressionLevel: 9, adaptiveFiltering: true })
+    .toFile(tmp);
+  fs.renameSync(tmp, SOURCE);
+}
+
 /** Square app icon with solid background (iOS / generic). */
 async function writeSquareIcon(size, outPath, background, paddingRatio = 0.14) {
   const pad = Math.round(size * paddingRatio);
@@ -107,6 +123,7 @@ async function writeNotificationIcon(size, outPath) {
 
 async function main() {
   await ensureSource();
+  await normalizeSourceForAapt();
   fs.mkdirSync(STORE_DIR, { recursive: true });
 
   const tasks = [

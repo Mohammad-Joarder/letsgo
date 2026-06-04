@@ -8,7 +8,10 @@
       "developmentClient": true,
       "distribution": "internal",
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "env": {
+          "NODE_OPTIONS": "--max-old-space-size=8192"
+        }
       },
       "ios": {
         "simulator": true
@@ -17,7 +20,10 @@
     "preview": {
       "distribution": "internal",
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "env": {
+          "NODE_OPTIONS": "--max-old-space-size=8192"
+        }
       },
       "ios": {
         "resourceClass": "m-medium"
@@ -28,7 +34,10 @@
     },
     "production": {
       "android": {
-        "buildType": "app-bundle"
+        "buildType": "app-bundle",
+        "env": {
+          "NODE_OPTIONS": "--max-old-space-size=8192"
+        }
       },
       "ios": {
         "resourceClass": "m-medium"

@@ -9,7 +9,7 @@ const EAS_PROJECT_ID = "121440e1-7b96-4621-98b3-9c13dd04821a";
 module.exports = {
   name: "Lets Go",
   slug: "letsgo",
-  version: "1.0.3",
+  version: "1.0.5",
   orientation: "portrait",
   scheme: "letsgo",
   userInterfaceStyle: "dark",
@@ -20,7 +20,7 @@ module.exports = {
     backgroundColor: "#FFFFFF",
   },
   ios: {
-    buildNumber: "4",
+    buildNumber: "5",
     bundleIdentifier: APP_BUNDLE_ID,
     icon: "./assets/icon.png",
     supportsTablet: true,
@@ -45,7 +45,7 @@ module.exports = {
   },
   android: {
     package: APP_BUNDLE_ID,
-    versionCode: 4,
+    versionCode: 5,
     adaptiveIcon: {
       foregroundImage: "./assets/adaptive-icon.png",
       backgroundColor: "#FFFFFF",
@@ -63,6 +63,16 @@ module.exports = {
     favicon: "./assets/favicon.png",
   },
   plugins: [
+    [
+      "expo-build-properties",
+      {
+        android: {
+          // Helps keep native modules + Kotlin aligned on EAS (mitigates intermittent
+          // "No matching variant" / AgpVersionAttr Gradle failures on SDK 54 — see expo/expo#42370, #42729).
+          kotlinVersion: "2.1.20",
+        },
+      },
+    ],
     [
       "expo-splash-screen",
       {
